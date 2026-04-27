@@ -204,21 +204,38 @@ jobs:
           PATTERN="${{ inputs.module-pattern }}"
           BUILD_ALL="${{ needs.detect-changes.outputs.build_all }}"
           MODULES="${{ needs.detect-changes.outputs.modules }}"
+          TARGET="${{ matrix.target }}"
           TASKS=""
+
+          # Derive the source-set directory that must exist for this target.
+          # Modules missing it don't declare the target → Gradle "task not found" error.
+          case "$TARGET" in
+            jvmTest)       SRC_DIR="jvmMain" ;;
+            linuxX64Test)  SRC_DIR="linuxMain" ;;
+            *)             SRC_DIR="" ;;
+          esac
+
+          has_target() {
+            local m="$1"
+            # No source-set constraint for this target → always include
+            [ -z "$SRC_DIR" ] && return 0
+            [ -d "${m}/src/${SRC_DIR}" ] || [ -d "${m}/src/${TARGET%Test}" ]
+          }
 
           if [ "$BUILD_ALL" = "true" ] || [ -z "$MODULES" ]; then
             for dir in ${PATTERN}*/; do
               [ "$dir" = "${PATTERN}library/" ] && continue
-              [ -d "$dir" ] && TASKS="$TASKS :${dir%/}:${{ matrix.target }}"
+              MODULE="${dir%/}"
+              [ -d "$dir" ] && has_target "$MODULE" && TASKS="$TASKS :${MODULE}:${TARGET}"
             done
           else
             for MODULE in $MODULES; do
-              [ -d "${MODULE}/" ] && TASKS="$TASKS :${MODULE}:${{ matrix.target }}"
+              [ -d "${MODULE}/" ] && has_target "$MODULE" && TASKS="$TASKS :${MODULE}:${TARGET}"
             done
           fi
 
           if [ -z "$TASKS" ]; then
-            echo "No modules with ${{ matrix.target }} — skipping"
+            echo "No modules with ${TARGET} target — skipping"
             exit 0
           fi
 
