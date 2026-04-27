@@ -5,7 +5,7 @@
 # Usage from your repo:
 #   jobs:
 #     publish:
-#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@main
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@v1.0.4
 #       with:
 #         module-pattern: 'cmp-'
 #         java-version: '21'
@@ -74,7 +74,7 @@ jobs:
         run: |
           PATTERN="${{ inputs.module-pattern }}"
           FILTER="${{ inputs.module }}"
-          MATRIX_JSON="["
+          ITEMS=""
           MODULES_LIST=""
           FIRST=true
 
@@ -88,30 +88,81 @@ jobs:
             VERSION=$(grep -m1 'version = ' "${dir}build.gradle.kts" | sed 's/.*"\(.*\)".*/\1/')
             ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
 
-            [ "$FIRST" = true ] && FIRST=false || { MATRIX_JSON="$MATRIX_JSON,"; MODULES_LIST="$MODULES_LIST,"; }
-            MATRIX_JSON="$MATRIX_JSON{\"module\":\"$MODULE\",\"version\":\"$VERSION\",\"artifact\":\"$ARTIFACT\"}"
+            [ "$FIRST" = true ] && FIRST=false || { ITEMS="$ITEMS,"; MODULES_LIST="$MODULES_LIST,"; }
+            ITEMS="$ITEMS{\"module\":\"$MODULE\",\"version\":\"$VERSION\",\"artifact\":\"$ARTIFACT\"}"
             MODULES_LIST="$MODULES_LIST$MODULE@$VERSION"
           done
 
-          MATRIX_JSON="[$MATRIX_JSON]"
-          echo "matrix={\"include\":$MATRIX_JSON}" >> $GITHUB_OUTPUT
+          echo "matrix={\"include\":[$ITEMS]}" >> $GITHUB_OUTPUT
           echo "modules_list=$MODULES_LIST" >> $GITHUB_OUTPUT
           echo "Discovered: $MODULES_LIST"
 
-  # ─── CI gate ───────────────────────────────────────────────────────────────
-  ci-gate:
-    name: CI Gate
-    needs: discover
-    uses: MobileByteLabs/mbl-actionhub/.github/workflows/ci-kmp-library.yml@v1.0.0
-    with:
-      module-pattern: ${{ inputs.module-pattern }}
-      java-version: ${{ inputs.java-version }}
-      java-distribution: ${{ inputs.java-distribution }}
+  # ─── Quality gate (Spotless + Detekt) ──────────────────────────────────────
+  quality:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run Spotless Check
+        run: ./gradlew spotlessCheck
+
+      - name: Run Detekt
+        run: ./gradlew detekt
+
+  # ─── JVM tests ─────────────────────────────────────────────────────────────
+  test-jvm:
+    name: Test (JVM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run JVM Tests
+        run: |
+          PATTERN="${{ inputs.module-pattern }}"
+          TASKS=""
+          for dir in ${PATTERN}*/; do
+            [ "$dir" = "${PATTERN}library/" ] && continue
+            [ -d "${dir}/src/jvmMain" ] || continue
+            TASKS="$TASKS :${dir%/}:jvmTest"
+          done
+          if [ -z "$TASKS" ]; then
+            echo "No modules with jvmMain — skipping"
+            exit 0
+          fi
+          echo "Running: ./gradlew $TASKS --parallel"
+          ./gradlew $TASKS --parallel
 
   # ─── Parallel publish (one job per module) ─────────────────────────────────
   publish:
     name: Publish ${{ matrix.module }}@${{ matrix.version }}
-    needs: [discover, ci-gate]
+    needs: [discover, quality, test-jvm]
+    if: needs.discover.outputs.modules_list != ''
     runs-on: macos-14        # macOS required to publish iOS/macOS klibs
     timeout-minutes: 30
     permissions:
@@ -121,7 +172,7 @@ jobs:
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
 
     steps:
-      - uses: MobileByteLabs/mbl-actionhub-publish-library-kmp@v1.0.0
+      - uses: MobileByteLabs/mbl-actionhub-publish-library-kmp@v1.0.1
         with:
           module: ${{ matrix.module }}
           version: ${{ matrix.version }}
