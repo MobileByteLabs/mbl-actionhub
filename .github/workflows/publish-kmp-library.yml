@@ -102,7 +102,7 @@ jobs:
   ci-gate:
     name: CI Gate
     needs: discover
-    uses: MobileByteLabs/mbl-actionhub/.github/workflows/ci-kmp-library.yml@main
+    uses: MobileByteLabs/mbl-actionhub/.github/workflows/ci-kmp-library.yml@v1.0.0
     with:
       module-pattern: ${{ inputs.module-pattern }}
       java-version: ${{ inputs.java-version }}
@@ -121,7 +121,7 @@ jobs:
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
 
     steps:
-      - uses: MobileByteLabs/mbl-actionhub-publish-library-kmp@main
+      - uses: MobileByteLabs/mbl-actionhub-publish-library-kmp@v1.0.0
         with:
           module: ${{ matrix.module }}
           version: ${{ matrix.version }}
