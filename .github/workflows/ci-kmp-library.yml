@@ -1,0 +1,283 @@
+# Reusable CI workflow for Kotlin Multiplatform libraries
+#
+# Runs: smart change detection → quality (Spotless + Detekt) → platform tests → full assemble
+#
+# Usage from your repo:
+#   jobs:
+#     ci:
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/ci-kmp-library.yml@main
+#       with:
+#         module-pattern: 'cmp-'        # optional, default: cmp-
+#         java-version: '21'            # optional, default: 21
+
+name: CI — KMP Library
+
+on:
+  workflow_call:
+    inputs:
+      module-pattern:
+        description: 'Prefix pattern for library modules (default: cmp-)'
+        type: string
+        default: 'cmp-'
+      java-version:
+        description: 'JDK version'
+        type: string
+        default: '21'
+      java-distribution:
+        description: 'JDK distribution'
+        type: string
+        default: 'zulu'
+      run-ios-tests:
+        description: 'Run iOS Simulator tests (requires macOS runner)'
+        type: boolean
+        default: true
+      run-linux-tests:
+        description: 'Run Linux Native tests'
+        type: boolean
+        default: true
+      run-quality:
+        description: 'Run Spotless + Detekt quality checks'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ─── Detect changed modules ────────────────────────────────────────────────
+  detect-changes:
+    name: Detect Changed Modules
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.detect.outputs.modules }}
+      build_all: ${{ steps.detect.outputs.build_all }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed modules
+        id: detect
+        run: |
+          PATTERN="${{ inputs.module-pattern }}"
+
+          # workflow_call (publish gate) always builds everything
+          if [ "${{ github.event_name }}" = "workflow_call" ]; then
+            echo "build_all=true" >> $GITHUB_OUTPUT
+            echo "modules=" >> $GITHUB_OUTPUT
+            echo "▶ Publish gate — building all modules"
+            exit 0
+          fi
+
+          BASE_SHA=$(git merge-base HEAD "origin/${{ github.base_ref || 'development' }}" 2>/dev/null || git rev-parse HEAD~1)
+          CHANGED=$(git diff --name-only "$BASE_SHA" HEAD)
+
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          # Root config change → rebuild all
+          if echo "$CHANGED" | grep -qE "^(build\.gradle\.kts|settings\.gradle\.kts|gradle/|buildSrc/|gradle\.properties|\.github/)"; then
+            echo "build_all=true" >> $GITHUB_OUTPUT
+            echo "modules=" >> $GITHUB_OUTPUT
+            echo "▶ Root config changed — building all modules"
+            exit 0
+          fi
+
+          MODULES=$(echo "$CHANGED" \
+            | grep "^${PATTERN}" \
+            | cut -d/ -f1 \
+            | grep -v "^${PATTERN}library$" \
+            | sort -u \
+            | tr '\n' ' ' \
+            | sed 's/ $//')
+
+          if [ -z "$MODULES" ]; then
+            echo "build_all=false" >> $GITHUB_OUTPUT
+            echo "modules=NONE" >> $GITHUB_OUTPUT
+            echo "▶ No ${PATTERN}* modules changed — skipping"
+          else
+            echo "build_all=false" >> $GITHUB_OUTPUT
+            echo "modules=$MODULES" >> $GITHUB_OUTPUT
+            echo "▶ Changed modules: $MODULES"
+          fi
+
+  # ─── Code quality ──────────────────────────────────────────────────────────
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: detect-changes
+    if: ${{ inputs.run-quality }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run Spotless Check
+        run: ./gradlew spotlessCheck
+
+      - name: Run Detekt
+        run: ./gradlew detekt
+
+      - name: Upload Detekt Report
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: detekt-report
+          path: build/reports/detekt/
+
+  # ─── Platform tests (JVM / iOS / Linux) ────────────────────────────────────
+  build:
+    name: Test (${{ matrix.name }})
+    needs: [detect-changes, quality]
+    if: |
+      always() &&
+      needs.quality.result != 'failure' &&
+      needs.detect-changes.outputs.modules != 'NONE'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: JVM
+            target: jvmTest
+            os: ubuntu-latest
+            condition: always
+          - name: iOS Simulator
+            target: iosSimulatorArm64Test
+            os: macos-14
+            condition: ios
+          - name: Linux Native
+            target: linuxX64Test
+            os: ubuntu-latest
+            condition: linux
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Skip check
+        if: |
+          (matrix.condition == 'ios' && !inputs.run-ios-tests) ||
+          (matrix.condition == 'linux' && !inputs.run-linux-tests)
+        run: echo "Skipped — disabled via input" && exit 0
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Kotlin/Native
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts') }}
+          restore-keys: ${{ runner.os }}-konan-
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run Tests (${{ matrix.name }})
+        run: |
+          PATTERN="${{ inputs.module-pattern }}"
+          BUILD_ALL="${{ needs.detect-changes.outputs.build_all }}"
+          MODULES="${{ needs.detect-changes.outputs.modules }}"
+          TASKS=""
+
+          if [ "$BUILD_ALL" = "true" ] || [ -z "$MODULES" ]; then
+            for dir in ${PATTERN}*/; do
+              [ "$dir" = "${PATTERN}library/" ] && continue
+              [ -d "$dir" ] && TASKS="$TASKS :${dir%/}:${{ matrix.target }}"
+            done
+          else
+            for MODULE in $MODULES; do
+              [ -d "${MODULE}/" ] && TASKS="$TASKS :${MODULE}:${{ matrix.target }}"
+            done
+          fi
+
+          if [ -z "$TASKS" ]; then
+            echo "No modules with ${{ matrix.target }} — skipping"
+            exit 0
+          fi
+
+          echo "Running: ./gradlew $TASKS --parallel"
+          ./gradlew $TASKS --parallel
+
+      - name: Upload Test Reports
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-reports-${{ matrix.name }}
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+
+  # ─── Build all targets (assemble — compile check across every platform) ────
+  build-all:
+    name: Build All Targets
+    needs: [detect-changes, build]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.modules != 'NONE' &&
+      needs.build.result != 'failure'
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Kotlin/Native
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts') }}
+          restore-keys: ${{ runner.os }}-konan-
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble All Libraries (All Targets)
+        run: |
+          PATTERN="${{ inputs.module-pattern }}"
+          TASKS=""
+          for dir in ${PATTERN}*/; do
+            [ "$dir" = "${PATTERN}library/" ] && continue
+            [ -d "$dir" ] && TASKS="$TASKS :${dir%/}:assemble"
+          done
+          echo "Running: ./gradlew $TASKS --parallel"
+          ./gradlew $TASKS --parallel
+
+      - name: Build Summary
+        run: |
+          PATTERN="${{ inputs.module-pattern }}"
+          echo "## Library Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Module | Version | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          for dir in ${PATTERN}*/; do
+            if [ -d "$dir" ]; then
+              MODULE="${dir%/}"
+              VERSION=$(grep -m1 'version = ' "${dir}build.gradle.kts" 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' || echo "N/A")
+              echo "| $MODULE | $VERSION | ✅ Built |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done

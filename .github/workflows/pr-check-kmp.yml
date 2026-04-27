@@ -1,0 +1,45 @@
+# Reusable PR check workflow for Kotlin Multiplatform libraries
+#
+# Fast PR gate: quality checks + JVM tests on changed modules only.
+# iOS/Linux tests are optional (off by default for PR speed).
+#
+# Usage from your repo:
+#   jobs:
+#     pr-check:
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/pr-check-kmp.yml@main
+
+name: PR Check — KMP Library
+
+on:
+  workflow_call:
+    inputs:
+      module-pattern:
+        type: string
+        default: 'cmp-'
+      java-version:
+        type: string
+        default: '21'
+      java-distribution:
+        type: string
+        default: 'zulu'
+      run-ios-tests:
+        description: 'Run iOS tests on PR (slow — disabled by default)'
+        type: boolean
+        default: false
+      run-linux-tests:
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr-check:
+    uses: MobileByteLabs/mbl-actionhub/.github/workflows/ci-kmp-library.yml@main
+    with:
+      module-pattern: ${{ inputs.module-pattern }}
+      java-version: ${{ inputs.java-version }}
+      java-distribution: ${{ inputs.java-distribution }}
+      run-ios-tests: ${{ inputs.run-ios-tests }}
+      run-linux-tests: ${{ inputs.run-linux-tests }}
+      run-quality: true

@@ -1,0 +1,186 @@
+# Reusable publish workflow for Kotlin Multiplatform libraries
+#
+# Discovers all publishable modules → runs CI gate → publishes in parallel to Maven Central
+#
+# Usage from your repo:
+#   jobs:
+#     publish:
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@main
+#       with:
+#         module-pattern: 'cmp-'
+#         java-version: '21'
+#       secrets: inherit
+
+name: Publish — KMP Library
+
+on:
+  workflow_call:
+    inputs:
+      module-pattern:
+        description: 'Prefix pattern for library modules (default: cmp-)'
+        type: string
+        default: 'cmp-'
+      module:
+        description: 'Specific module to publish (leave empty for all matching modules)'
+        type: string
+        default: ''
+      java-version:
+        description: 'JDK version'
+        type: string
+        default: '21'
+      java-distribution:
+        description: 'JDK distribution'
+        type: string
+        default: 'zulu'
+      sonatype-host:
+        description: 'Sonatype host (CENTRAL_PORTAL / DEFAULT / S01)'
+        type: string
+        default: 'CENTRAL_PORTAL'
+      create-github-release:
+        description: 'Create a GitHub release per module'
+        type: boolean
+        default: false
+    secrets:
+      MAVEN_CENTRAL_USERNAME:
+        required: true
+      MAVEN_CENTRAL_PASSWORD:
+        required: true
+      SIGNING_KEY_ID:
+        required: true
+      GPG_KEY_CONTENTS:
+        required: true
+      SIGNING_PASSWORD:
+        required: true
+      GH_TOKEN:
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  # ─── Discover publishable modules ──────────────────────────────────────────
+  discover:
+    name: Discover Modules
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+      modules_list: ${{ steps.discover.outputs.modules_list }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Discover Publishable Modules
+        id: discover
+        run: |
+          PATTERN="${{ inputs.module-pattern }}"
+          FILTER="${{ inputs.module }}"
+          MATRIX_JSON="["
+          MODULES_LIST=""
+          FIRST=true
+
+          for dir in ${PATTERN}*/; do
+            [ ! -d "$dir" ] && continue
+            grep -q "mavenPublishing" "${dir}build.gradle.kts" 2>/dev/null || continue
+
+            MODULE="${dir%/}"
+            [ -n "$FILTER" ] && [ "$MODULE" != "$FILTER" ] && continue
+
+            VERSION=$(grep -m1 'version = ' "${dir}build.gradle.kts" | sed 's/.*"\(.*\)".*/\1/')
+            ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
+
+            [ "$FIRST" = true ] && FIRST=false || { MATRIX_JSON="$MATRIX_JSON,"; MODULES_LIST="$MODULES_LIST,"; }
+            MATRIX_JSON="$MATRIX_JSON{\"module\":\"$MODULE\",\"version\":\"$VERSION\",\"artifact\":\"$ARTIFACT\"}"
+            MODULES_LIST="$MODULES_LIST$MODULE@$VERSION"
+          done
+
+          MATRIX_JSON="[$MATRIX_JSON]"
+          echo "matrix={\"include\":$MATRIX_JSON}" >> $GITHUB_OUTPUT
+          echo "modules_list=$MODULES_LIST" >> $GITHUB_OUTPUT
+          echo "Discovered: $MODULES_LIST"
+
+  # ─── CI gate ───────────────────────────────────────────────────────────────
+  ci-gate:
+    name: CI Gate
+    needs: discover
+    uses: MobileByteLabs/mbl-actionhub/.github/workflows/ci-kmp-library.yml@main
+    with:
+      module-pattern: ${{ inputs.module-pattern }}
+      java-version: ${{ inputs.java-version }}
+      java-distribution: ${{ inputs.java-distribution }}
+
+  # ─── Parallel publish (one job per module) ─────────────────────────────────
+  publish:
+    name: Publish ${{ matrix.module }}@${{ matrix.version }}
+    needs: [discover, ci-gate]
+    runs-on: macos-14        # macOS required to publish iOS/macOS klibs
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+
+    steps:
+      - uses: MobileByteLabs/mbl-actionhub-publish-library-kmp@main
+        with:
+          module: ${{ matrix.module }}
+          version: ${{ matrix.version }}
+          maven-central-username: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          maven-central-password: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          gpg-key-id: ${{ secrets.SIGNING_KEY_ID }}
+          gpg-key: ${{ secrets.GPG_KEY_CONTENTS }}
+          gpg-passphrase: ${{ secrets.SIGNING_PASSWORD }}
+          github-token: ${{ secrets.GH_TOKEN }}
+          java-version: ${{ inputs.java-version }}
+          java-distribution: ${{ inputs.java-distribution }}
+          sonatype-host: ${{ inputs.sonatype-host }}
+          create-github-release: ${{ inputs.create-github-release }}
+
+      - name: Module Summary
+        if: success()
+        run: |
+          echo "### ✅ ${{ matrix.module }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Artifact:** io.github.mobilebytelabs:${{ matrix.artifact }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ matrix.version }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Failure Summary
+        if: failure()
+        run: |
+          echo "### ❌ ${{ matrix.module }}" >> $GITHUB_STEP_SUMMARY
+          echo "Failed to publish — check logs." >> $GITHUB_STEP_SUMMARY
+
+  # ─── Release summary ───────────────────────────────────────────────────────
+  summary:
+    name: Release Summary
+    needs: [discover, publish]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Release Summary
+        run: |
+          PATTERN="${{ inputs.module-pattern }}"
+          echo "# Maven Central Release" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Module | Artifact | Version |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|----------|---------|" >> $GITHUB_STEP_SUMMARY
+
+          for dir in ${PATTERN}*/; do
+            [ ! -d "$dir" ] && continue
+            grep -q "mavenPublishing" "${dir}build.gradle.kts" 2>/dev/null || continue
+            MODULE="${dir%/}"
+            FILTER="${{ inputs.module }}"
+            [ -n "$FILTER" ] && [ "$MODULE" != "$FILTER" ] && continue
+            VERSION=$(grep -m1 'version = ' "${dir}build.gradle.kts" | sed 's/.*"\(.*\)".*/\1/')
+            ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
+            echo "| $MODULE | io.github.mobilebytelabs:$ARTIFACT | $VERSION |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "*[Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*" >> $GITHUB_STEP_SUMMARY
