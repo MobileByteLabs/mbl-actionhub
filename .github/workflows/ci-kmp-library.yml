@@ -53,7 +53,7 @@ jobs:
       build_all: ${{ steps.detect.outputs.build_all }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -70,7 +70,15 @@ jobs:
             exit 0
           fi
 
-          BASE_SHA=$(git merge-base HEAD "origin/${{ github.base_ref || 'development' }}" 2>/dev/null || git rev-parse HEAD~1)
+          # For push events to the base branch (e.g. merge commits), origin/branch is already
+          # at HEAD by the time the runner starts → merge-base diff is empty.
+          # Use HEAD~1 to diff the merge commit itself against its parent.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BASE_SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)
+          else
+            # PRs: diff against the target branch tip for accurate changed-file detection
+            BASE_SHA=$(git merge-base HEAD "origin/${{ github.base_ref || 'development' }}" 2>/dev/null || git rev-parse HEAD~1)
+          fi
           CHANGED=$(git diff --name-only "$BASE_SHA" HEAD)
 
           echo "Changed files:"
@@ -111,19 +119,19 @@ jobs:
     if: ${{ inputs.run-quality }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Validate Gradle Wrapper
-        uses: gradle/actions/wrapper-validation@v4
+        uses: gradle/actions/wrapper-validation@v6
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Run Spotless Check
         run: ./gradlew spotlessCheck
@@ -132,7 +140,7 @@ jobs:
         run: ./gradlew detekt
 
       - name: Upload Detekt Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: detekt-report
@@ -173,23 +181,23 @@ jobs:
         run: echo "Skipped — disabled via input" && exit 0
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Cache Kotlin/Native
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.konan
           key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts') }}
           restore-keys: ${{ runner.os }}-konan-
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Run Tests (${{ matrix.name }})
         run: |
@@ -218,7 +226,7 @@ jobs:
           ./gradlew $TASKS --parallel
 
       - name: Upload Test Reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: test-reports-${{ matrix.name }}
@@ -238,23 +246,23 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Cache Kotlin/Native
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.konan
           key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts') }}
           restore-keys: ${{ runner.os }}-konan-
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Assemble All Libraries (All Targets)
         run: |

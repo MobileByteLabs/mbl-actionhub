@@ -67,7 +67,7 @@ jobs:
       modules_list: ${{ steps.discover.outputs.modules_list }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Discover Publishable Modules
         id: discover
@@ -157,7 +157,7 @@ jobs:
     if: always()
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Create Release Summary
         run: |
