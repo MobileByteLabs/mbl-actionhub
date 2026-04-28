@@ -85,8 +85,15 @@ jobs:
             MODULE="${dir%/}"
             [ -n "$FILTER" ] && [ "$MODULE" != "$FILTER" ] && continue
 
-            VERSION=$(grep -m1 'version = ' "${dir}build.gradle.kts" | sed 's/.*"\(.*\)".*/\1/')
-            ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
+            # Resolve version: try literal first, then resolve gradle property reference
+            RAW_VERSION=$(grep -m1 'version = ' "${dir}build.gradle.kts" || true)
+            if echo "$RAW_VERSION" | grep -qE 'version = "[0-9]'; then
+              VERSION=$(echo "$RAW_VERSION" | sed 's/.*"\([0-9][^"]*\)".*/\1/')
+            else
+              PROP_KEY=$(echo "$RAW_VERSION" | grep -o '"[^"]*"' | head -1 | tr -d '"')
+              VERSION=$(grep "^${PROP_KEY}=" gradle.properties 2>/dev/null | cut -d= -f2 || true)
+            fi
+            ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/' || echo "$MODULE")
 
             [ "$FIRST" = true ] && FIRST=false || { ITEMS="$ITEMS,"; MODULES_LIST="$MODULES_LIST,"; }
             ITEMS="$ITEMS{\"module\":\"$MODULE\",\"version\":\"$VERSION\",\"artifact\":\"$ARTIFACT\"}"
