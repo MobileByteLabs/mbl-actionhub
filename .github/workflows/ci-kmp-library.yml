@@ -13,7 +13,7 @@
 # Usage from your repo:
 #   jobs:
 #     ci:
-#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/ci-kmp-library.yml@v1.1.0
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/ci-kmp-library.yml@v1.1.1
 #       with:
 #         module-pattern: 'cmp-'        # optional, default: cmp-
 #         java-version: '21'            # optional, default: 21
@@ -80,9 +80,19 @@ jobs:
             exit 0
           fi
 
-          # For push events to the base branch (e.g. merge commits), origin/branch is already
-          # at HEAD by the time the runner starts → merge-base diff is empty.
-          # Use HEAD~1 to diff the merge commit itself against its parent.
+          # Push to main/development/master always builds everything.
+          # Every merge to the main branch must be fully verified — no skipping.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BRANCH="${GITHUB_REF#refs/heads/}"
+            if echo "$BRANCH" | grep -qE "^(main|master|development)$"; then
+              echo "build_all=true" >> $GITHUB_OUTPUT
+              echo "modules=" >> $GITHUB_OUTPUT
+              echo "▶ Push to $BRANCH — building all modules"
+              exit 0
+            fi
+          fi
+
+          # For push events to feature branches, diff against parent commit.
           if [ "${{ github.event_name }}" = "push" ]; then
             BASE_SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)
           else
