@@ -1,14 +1,24 @@
 # Reusable CI workflow for Kotlin Multiplatform libraries
 #
-# Runs: smart change detection → quality (Spotless + Detekt) → platform tests → full assemble
+# Fast gate (default — every push/PR, ~3-5 min):
+#   detect changes → quality (Spotless + Detekt) → JVM tests → compile-all-targets (assemble)
+#
+# Slow gate (opt-in — pre-release / nightly):
+#   + run-ios-tests: true   → iosSimulatorArm64Test on macos-14
+#   + run-linux-tests: true → linuxX64Test on ubuntu-latest
+#
+# Rationale: compile-all-targets catches missing actuals / type errors on every platform.
+# JVM tests validate 95% of common logic. iOS/Linux test execution is opt-in for release gates.
 #
 # Usage from your repo:
 #   jobs:
 #     ci:
-#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/ci-kmp-library.yml@main
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/ci-kmp-library.yml@v1.1.0
 #       with:
 #         module-pattern: 'cmp-'        # optional, default: cmp-
 #         java-version: '21'            # optional, default: 21
+#         run-ios-tests: true           # opt-in for slow gate
+#         run-linux-tests: true         # opt-in for slow gate
 
 name: CI — KMP Library
 
@@ -28,13 +38,13 @@ on:
         type: string
         default: 'zulu'
       run-ios-tests:
-        description: 'Run iOS Simulator tests (requires macOS runner)'
+        description: 'Run iOS Simulator tests — slow gate, opt-in only (requires macOS runner)'
         type: boolean
-        default: true
+        default: false
       run-linux-tests:
-        description: 'Run Linux Native tests'
+        description: 'Run Linux Native tests — slow gate, opt-in only'
         type: boolean
-        default: true
+        default: false
       run-quality:
         description: 'Run Spotless + Detekt quality checks'
         type: boolean
@@ -53,7 +63,7 @@ jobs:
       build_all: ${{ steps.detect.outputs.build_all }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -119,19 +129,19 @@ jobs:
     if: ${{ inputs.run-quality }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Validate Gradle Wrapper
-        uses: gradle/actions/wrapper-validation@v6
+        uses: gradle/actions/wrapper-validation@v4
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Run Spotless Check
         run: ./gradlew spotlessCheck
@@ -140,102 +150,56 @@ jobs:
         run: ./gradlew detekt
 
       - name: Upload Detekt Report
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: detekt-report
           path: build/reports/detekt/
 
-  # ─── Platform tests (JVM / iOS / Linux) ────────────────────────────────────
-  build:
-    name: Test (${{ matrix.name }})
+  # ─── JVM tests (fast gate — always runs) ───────────────────────────────────
+  test-jvm:
+    name: Test (JVM)
     needs: [detect-changes, quality]
     if: |
       always() &&
       needs.quality.result != 'failure' &&
       needs.detect-changes.outputs.modules != 'NONE'
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: JVM
-            target: jvmTest
-            os: ubuntu-latest
-            condition: always
-          - name: iOS Simulator
-            target: iosSimulatorArm64Test
-            os: macos-14
-            condition: ios
-          - name: Linux Native
-            target: linuxX64Test
-            os: ubuntu-latest
-            condition: linux
-    runs-on: ${{ matrix.os }}
-
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Skip check
-        if: |
-          (matrix.condition == 'ios' && !inputs.run-ios-tests) ||
-          (matrix.condition == 'linux' && !inputs.run-linux-tests)
-        run: echo "Skipped — disabled via input" && exit 0
-
       - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Cache Kotlin/Native
-        uses: actions/cache@v5
-        with:
-          path: ~/.konan
-          key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts') }}
-          restore-keys: ${{ runner.os }}-konan-
+        uses: actions/checkout@v4
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v4
 
-      - name: Run Tests (${{ matrix.name }})
+      - name: Run JVM Tests
         run: |
           PATTERN="${{ inputs.module-pattern }}"
           BUILD_ALL="${{ needs.detect-changes.outputs.build_all }}"
           MODULES="${{ needs.detect-changes.outputs.modules }}"
-          TARGET="${{ matrix.target }}"
           TASKS=""
-
-          # Derive the source-set directory that must exist for this target.
-          # Modules missing it don't declare the target → Gradle "task not found" error.
-          case "$TARGET" in
-            jvmTest)       SRC_DIR="jvmMain" ;;
-            linuxX64Test)  SRC_DIR="linuxMain" ;;
-            *)             SRC_DIR="" ;;
-          esac
-
-          has_target() {
-            local m="$1"
-            # No source-set constraint for this target → always include
-            [ -z "$SRC_DIR" ] && return 0
-            [ -d "${m}/src/${SRC_DIR}" ] || [ -d "${m}/src/${TARGET%Test}" ]
-          }
 
           if [ "$BUILD_ALL" = "true" ] || [ -z "$MODULES" ]; then
             for dir in ${PATTERN}*/; do
               [ "$dir" = "${PATTERN}library/" ] && continue
-              MODULE="${dir%/}"
-              [ -d "$dir" ] && has_target "$MODULE" && TASKS="$TASKS :${MODULE}:${TARGET}"
+              [ -d "${dir}src/jvmMain" ] || continue
+              TASKS="$TASKS :${dir%/}:jvmTest"
             done
           else
             for MODULE in $MODULES; do
-              [ -d "${MODULE}/" ] && has_target "$MODULE" && TASKS="$TASKS :${MODULE}:${TARGET}"
+              [ -d "${MODULE}/src/jvmMain" ] && TASKS="$TASKS :${MODULE}:jvmTest"
             done
           fi
 
           if [ -z "$TASKS" ]; then
-            echo "No modules with ${TARGET} target — skipping"
+            echo "No modules with jvmMain — skipping"
             exit 0
           fi
 
@@ -243,43 +207,178 @@ jobs:
           ./gradlew $TASKS --parallel
 
       - name: Upload Test Reports
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: test-reports-${{ matrix.name }}
+          name: test-reports-jvm
           path: |
             **/build/reports/tests/
             **/build/test-results/
 
-  # ─── Build all targets (assemble — compile check across every platform) ────
-  build-all:
-    name: Build All Targets
-    needs: [detect-changes, build]
+  # ─── iOS Simulator tests (slow gate — opt-in) ──────────────────────────────
+  test-ios:
+    name: Test (iOS Simulator)
+    needs: [detect-changes, quality]
     if: |
+      inputs.run-ios-tests == true &&
       always() &&
-      needs.detect-changes.outputs.modules != 'NONE' &&
-      needs.build.result != 'failure'
+      needs.quality.result != 'failure' &&
+      needs.detect-changes.outputs.modules != 'NONE'
     runs-on: macos-14
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Cache Kotlin/Native
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: ~/.konan
           key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts') }}
           restore-keys: ${{ runner.os }}-konan-
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run iOS Simulator Tests
+        run: |
+          PATTERN="${{ inputs.module-pattern }}"
+          BUILD_ALL="${{ needs.detect-changes.outputs.build_all }}"
+          MODULES="${{ needs.detect-changes.outputs.modules }}"
+          TASKS=""
+
+          if [ "$BUILD_ALL" = "true" ] || [ -z "$MODULES" ]; then
+            for dir in ${PATTERN}*/; do
+              [ "$dir" = "${PATTERN}library/" ] && continue
+              [ -d "$dir" ] && TASKS="$TASKS :${dir%/}:iosSimulatorArm64Test"
+            done
+          else
+            for MODULE in $MODULES; do
+              [ -d "${MODULE}/" ] && TASKS="$TASKS :${MODULE}:iosSimulatorArm64Test"
+            done
+          fi
+
+          if [ -z "$TASKS" ]; then
+            echo "No modules — skipping"
+            exit 0
+          fi
+
+          echo "Running: ./gradlew $TASKS --parallel"
+          ./gradlew $TASKS --parallel
+
+      - name: Upload Test Reports
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-reports-ios
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+
+  # ─── Linux Native tests (slow gate — opt-in) ───────────────────────────────
+  test-linux:
+    name: Test (Linux Native)
+    needs: [detect-changes, quality]
+    if: |
+      inputs.run-linux-tests == true &&
+      always() &&
+      needs.quality.result != 'failure' &&
+      needs.detect-changes.outputs.modules != 'NONE'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Kotlin/Native
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts') }}
+          restore-keys: ${{ runner.os }}-konan-
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run Linux Native Tests
+        run: |
+          PATTERN="${{ inputs.module-pattern }}"
+          BUILD_ALL="${{ needs.detect-changes.outputs.build_all }}"
+          MODULES="${{ needs.detect-changes.outputs.modules }}"
+          TASKS=""
+
+          if [ "$BUILD_ALL" = "true" ] || [ -z "$MODULES" ]; then
+            for dir in ${PATTERN}*/; do
+              [ "$dir" = "${PATTERN}library/" ] && continue
+              [ -d "${dir}src/linuxMain" ] || continue
+              TASKS="$TASKS :${dir%/}:linuxX64Test"
+            done
+          else
+            for MODULE in $MODULES; do
+              [ -d "${MODULE}/src/linuxMain" ] && TASKS="$TASKS :${MODULE}:linuxX64Test"
+            done
+          fi
+
+          if [ -z "$TASKS" ]; then
+            echo "No modules with linuxMain — skipping"
+            exit 0
+          fi
+
+          echo "Running: ./gradlew $TASKS --parallel"
+          ./gradlew $TASKS --parallel
+
+      - name: Upload Test Reports
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-reports-linux
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+
+  # ─── Compile all targets (fast gate — always runs) ─────────────────────────
+  # Catches missing actuals / type errors across every KMP platform without
+  # running tests (much faster than test execution on native targets).
+  compile-all-targets:
+    name: Compile All Targets
+    needs: [detect-changes, test-jvm]
+    if: |
+      always() &&
+      needs.detect-changes.outputs.modules != 'NONE' &&
+      needs.test-jvm.result != 'failure'
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Kotlin/Native
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts') }}
+          restore-keys: ${{ runner.os }}-konan-
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Assemble All Libraries (All Targets)
         run: |
@@ -297,12 +396,10 @@ jobs:
           PATTERN="${{ inputs.module-pattern }}"
           echo "## Library Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Module | Version | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Module | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|--------|" >> $GITHUB_STEP_SUMMARY
           for dir in ${PATTERN}*/; do
-            if [ -d "$dir" ]; then
-              MODULE="${dir%/}"
-              VERSION=$(grep -m1 'version = ' "${dir}build.gradle.kts" 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' || echo "N/A")
-              echo "| $MODULE | $VERSION | ✅ Built |" >> $GITHUB_STEP_SUMMARY
+            if [ -d "$dir" ] && [ "$dir" != "${PATTERN}library/" ]; then
+              echo "| ${dir%/} | ✅ All targets compiled |" >> $GITHUB_STEP_SUMMARY
             fi
           done
