@@ -4,13 +4,13 @@
 # publishes in parallel to Maven Central
 #
 # Version resolution (fully automatic):
-#   1. Queries Maven Central for latest published version → bumps patch
-#   2. If not yet published → reads version from build.gradle.kts / gradle.properties
+#   1. Maven Central → latest published version → bumps patch
+#   2. GitHub Releases → latest tag → bumps patch (for first Maven publish)
 #
 # Usage from your repo:
 #   jobs:
 #     publish:
-#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@v1.0.9
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@v1.0.11
 #       with:
 #         module-pattern: 'cmp-'
 #         group-id: 'io.github.mobilebytelabs'
@@ -84,16 +84,12 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
       current: ${{ steps.resolve.outputs.current }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
       - name: Resolve next version
         id: resolve
-        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.0.4
+        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.0.5
         with:
           group-id: ${{ inputs.group-id }}
           artifact-id: ${{ inputs.artifact-id }}
-          module-pattern: ${{ inputs.module-pattern }}
           bump: ${{ inputs.bump }}
 
   # ─── Discover publishable modules ──────────────────────────────────────────
