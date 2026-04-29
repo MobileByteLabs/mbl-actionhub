@@ -1,25 +1,21 @@
 # Reusable publish workflow for Kotlin Multiplatform libraries
 #
-# Discovers all publishable modules → auto-bumps patch version → runs CI gate →
+# Discovers all publishable modules → auto-resolves version → runs CI gate →
 # publishes in parallel to Maven Central
+#
+# Version resolution (fully automatic):
+#   1. Queries Maven Central for latest published version → bumps patch
+#   2. If not yet published → reads version from build.gradle.kts / gradle.properties
 #
 # Usage from your repo:
 #   jobs:
 #     publish:
-#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@v1.0.8
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@v1.0.9
 #       with:
 #         module-pattern: 'cmp-'
 #         group-id: 'io.github.mobilebytelabs'
 #         artifact-id: 'cmp-clipboard'
-#         java-version: '21'
 #       secrets: inherit
-#
-# Auto-version: Fetches the latest published version from Maven Central,
-# bumps the patch number, and publishes. No version in the repo to manage.
-#
-# First publish: pass version explicitly:
-#   with:
-#     version: '1.0.0'
 
 name: Publish — KMP Library
 
@@ -35,15 +31,11 @@ on:
         type: string
         default: ''
       group-id:
-        description: 'Maven group ID (e.g. io.github.mobilebytelabs). Required for version resolution.'
+        description: 'Maven group ID (e.g. io.github.mobilebytelabs)'
         type: string
         default: ''
       artifact-id:
-        description: 'Maven artifact ID to query for latest version (e.g. cmp-clipboard). Required for version resolution.'
-        type: string
-        default: ''
-      version:
-        description: 'Explicit version to publish. Skips Maven Central lookup when set (useful for first publish).'
+        description: 'Maven artifact ID for version lookup (e.g. cmp-clipboard)'
         type: string
         default: ''
       bump:
@@ -89,24 +81,15 @@ jobs:
     name: Resolve Version
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.explicit.outputs.version || steps.resolve.outputs.version }}
+      version: ${{ steps.resolve.outputs.version }}
       current: ${{ steps.resolve.outputs.current }}
     steps:
-      - name: Use explicit version
-        id: explicit
-        if: inputs.version != ''
-        run: |
-          echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
-          echo "Using explicit version: ${{ inputs.version }}"
-
       - name: Checkout
-        if: inputs.version == ''
         uses: actions/checkout@v6
 
       - name: Resolve next version
         id: resolve
-        if: inputs.version == ''
-        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.0.2
+        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.0.3
         with:
           group-id: ${{ inputs.group-id }}
           artifact-id: ${{ inputs.artifact-id }}
