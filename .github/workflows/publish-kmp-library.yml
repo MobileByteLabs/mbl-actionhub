@@ -6,14 +6,20 @@
 # Usage from your repo:
 #   jobs:
 #     publish:
-#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@v1.0.6
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@v1.0.8
 #       with:
 #         module-pattern: 'cmp-'
+#         group-id: 'io.github.mobilebytelabs'
+#         artifact-id: 'cmp-clipboard'
 #         java-version: '21'
 #       secrets: inherit
 #
 # Auto-version: Fetches the latest published version from Maven Central,
 # bumps the patch number, and publishes. No version in the repo to manage.
+#
+# First publish: pass version explicitly:
+#   with:
+#     version: '1.0.0'
 
 name: Publish — KMP Library
 
@@ -28,6 +34,22 @@ on:
         description: 'Specific module to publish (leave empty for all matching modules)'
         type: string
         default: ''
+      group-id:
+        description: 'Maven group ID (e.g. io.github.mobilebytelabs). Required for version resolution.'
+        type: string
+        default: ''
+      artifact-id:
+        description: 'Maven artifact ID to query for latest version (e.g. cmp-clipboard). Required for version resolution.'
+        type: string
+        default: ''
+      version:
+        description: 'Explicit version to publish. Skips Maven Central lookup when set (useful for first publish).'
+        type: string
+        default: ''
+      bump:
+        description: 'Version bump type: patch (default), minor, or major'
+        type: string
+        default: 'patch'
       java-version:
         description: 'JDK version'
         type: string
@@ -67,40 +89,29 @@ jobs:
     name: Resolve Version
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.resolve.outputs.version }}
+      version: ${{ steps.explicit.outputs.version || steps.resolve.outputs.version }}
       current: ${{ steps.resolve.outputs.current }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Detect fallback version
-        id: fallback
-        shell: bash
+      - name: Use explicit version
+        id: explicit
+        if: inputs.version != ''
         run: |
-          PATTERN="${{ inputs.module-pattern }}"
-          VERSION=""
-          # Try version from first module's build.gradle.kts
-          for dir in ${PATTERN}*/; do
-            [ ! -f "${dir}build.gradle.kts" ] && continue
-            # Check for literal version = "x.y.z"
-            VERSION=$(grep -m1 'version\s*=\s*"[0-9]' "${dir}build.gradle.kts" 2>/dev/null | grep -o '"[0-9][^"]*"' | tr -d '"' || true)
-            if [ -n "$VERSION" ]; then break; fi
-            # Check for gradle property reference
-            PROP_KEY=$(grep -m1 'version\s*=.*gradleProperty' "${dir}build.gradle.kts" 2>/dev/null | grep -o '"[^"]*"' | tr -d '"' || true)
-            if [ -n "$PROP_KEY" ] && [ -f "gradle.properties" ]; then
-              VERSION=$(grep "^${PROP_KEY}=" gradle.properties 2>/dev/null | cut -d= -f2 || true)
-              if [ -n "$VERSION" ]; then break; fi
-            fi
-          done
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Fallback version: ${VERSION:-none}"
+          echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          echo "Using explicit version: ${{ inputs.version }}"
+
+      - name: Checkout
+        if: inputs.version == ''
+        uses: actions/checkout@v6
 
       - name: Resolve next version
         id: resolve
-        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.0.1
+        if: inputs.version == ''
+        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.0.2
         with:
+          group-id: ${{ inputs.group-id }}
+          artifact-id: ${{ inputs.artifact-id }}
           module-pattern: ${{ inputs.module-pattern }}
-          fallback-version: ${{ steps.fallback.outputs.version }}
+          bump: ${{ inputs.bump }}
 
   # ─── Discover publishable modules ──────────────────────────────────────────
   discover:
