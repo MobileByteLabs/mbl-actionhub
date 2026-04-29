@@ -1,15 +1,19 @@
 # Reusable publish workflow for Kotlin Multiplatform libraries
 #
-# Discovers all publishable modules → runs CI gate → publishes in parallel to Maven Central
+# Discovers all publishable modules → auto-bumps patch version → runs CI gate →
+# publishes in parallel to Maven Central
 #
 # Usage from your repo:
 #   jobs:
 #     publish:
-#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@v1.0.4
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@v1.0.6
 #       with:
 #         module-pattern: 'cmp-'
 #         java-version: '21'
 #       secrets: inherit
+#
+# Auto-version: Fetches the latest published version from Maven Central,
+# bumps the patch number, and publishes. No version in the repo to manage.
 
 name: Publish — KMP Library
 
@@ -58,9 +62,27 @@ permissions:
   contents: write
 
 jobs:
+  # ─── Resolve next version from Maven Central ──────────────────────────────
+  resolve-version:
+    name: Resolve Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      current: ${{ steps.resolve.outputs.current }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve next version
+        id: resolve
+        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.0.0
+        with:
+          module-pattern: ${{ inputs.module-pattern }}
+
   # ─── Discover publishable modules ──────────────────────────────────────────
   discover:
     name: Discover Modules
+    needs: resolve-version
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.discover.outputs.matrix }}
@@ -74,6 +96,7 @@ jobs:
         run: |
           PATTERN="${{ inputs.module-pattern }}"
           FILTER="${{ inputs.module }}"
+          VERSION="${{ needs.resolve-version.outputs.version }}"
           ITEMS=""
           MODULES_LIST=""
           FIRST=true
@@ -85,14 +108,6 @@ jobs:
             MODULE="${dir%/}"
             [ -n "$FILTER" ] && [ "$MODULE" != "$FILTER" ] && continue
 
-            # Resolve version: try literal first, then resolve gradle property reference
-            RAW_VERSION=$(grep -m1 'version = ' "${dir}build.gradle.kts" || true)
-            if echo "$RAW_VERSION" | grep -qE 'version = "[0-9]'; then
-              VERSION=$(echo "$RAW_VERSION" | sed 's/.*"\([0-9][^"]*\)".*/\1/')
-            else
-              PROP_KEY=$(echo "$RAW_VERSION" | grep -o '"[^"]*"' | head -1 | tr -d '"')
-              VERSION=$(grep "^${PROP_KEY}=" gradle.properties 2>/dev/null | cut -d= -f2 || true)
-            fi
             ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/' || echo "$MODULE")
 
             [ "$FIRST" = true ] && FIRST=false || { ITEMS="$ITEMS,"; MODULES_LIST="$MODULES_LIST,"; }
@@ -210,7 +225,7 @@ jobs:
   # ─── Release summary ───────────────────────────────────────────────────────
   summary:
     name: Release Summary
-    needs: [discover, publish]
+    needs: [resolve-version, discover, publish]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -220,9 +235,11 @@ jobs:
       - name: Create Release Summary
         run: |
           PATTERN="${{ inputs.module-pattern }}"
+          VERSION="${{ needs.resolve-version.outputs.version }}"
           echo "# Maven Central Release" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${VERSION}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Published" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -235,7 +252,6 @@ jobs:
             MODULE="${dir%/}"
             FILTER="${{ inputs.module }}"
             [ -n "$FILTER" ] && [ "$MODULE" != "$FILTER" ] && continue
-            VERSION=$(grep -m1 'version = ' "${dir}build.gradle.kts" | sed 's/.*"\(.*\)".*/\1/')
             ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
             echo "| $MODULE | io.github.mobilebytelabs:$ARTIFACT | $VERSION |" >> $GITHUB_STEP_SUMMARY
           done
