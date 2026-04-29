@@ -73,11 +73,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Detect fallback version
+        id: fallback
+        shell: bash
+        run: |
+          PATTERN="${{ inputs.module-pattern }}"
+          VERSION=""
+          # Try version from first module's build.gradle.kts
+          for dir in ${PATTERN}*/; do
+            [ ! -f "${dir}build.gradle.kts" ] && continue
+            # Check for literal version = "x.y.z"
+            VERSION=$(grep -m1 'version\s*=\s*"[0-9]' "${dir}build.gradle.kts" 2>/dev/null | grep -o '"[0-9][^"]*"' | tr -d '"' || true)
+            if [ -n "$VERSION" ]; then break; fi
+            # Check for gradle property reference
+            PROP_KEY=$(grep -m1 'version\s*=.*gradleProperty' "${dir}build.gradle.kts" 2>/dev/null | grep -o '"[^"]*"' | tr -d '"' || true)
+            if [ -n "$PROP_KEY" ] && [ -f "gradle.properties" ]; then
+              VERSION=$(grep "^${PROP_KEY}=" gradle.properties 2>/dev/null | cut -d= -f2 || true)
+              if [ -n "$VERSION" ]; then break; fi
+            fi
+          done
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Fallback version: ${VERSION:-none}"
+
       - name: Resolve next version
         id: resolve
-        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.0.0
+        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.0.1
         with:
           module-pattern: ${{ inputs.module-pattern }}
+          fallback-version: ${{ steps.fallback.outputs.version }}
 
   # ─── Discover publishable modules ──────────────────────────────────────────
   discover:
@@ -108,7 +131,8 @@ jobs:
             MODULE="${dir%/}"
             [ -n "$FILTER" ] && [ "$MODULE" != "$FILTER" ] && continue
 
-            ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/' || echo "$MODULE")
+            ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" 2>/dev/null | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
+            [ -z "$ARTIFACT" ] && ARTIFACT="$MODULE"
 
             [ "$FIRST" = true ] && FIRST=false || { ITEMS="$ITEMS,"; MODULES_LIST="$MODULES_LIST,"; }
             ITEMS="$ITEMS{\"module\":\"$MODULE\",\"version\":\"$VERSION\",\"artifact\":\"$ARTIFACT\"}"
@@ -252,7 +276,8 @@ jobs:
             MODULE="${dir%/}"
             FILTER="${{ inputs.module }}"
             [ -n "$FILTER" ] && [ "$MODULE" != "$FILTER" ] && continue
-            ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
+            ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" 2>/dev/null | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
+            [ -z "$ARTIFACT" ] && ARTIFACT="$MODULE"
             echo "| $MODULE | io.github.mobilebytelabs:$ARTIFACT | $VERSION |" >> $GITHUB_STEP_SUMMARY
           done
 
