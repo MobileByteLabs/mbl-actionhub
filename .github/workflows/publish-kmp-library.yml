@@ -10,7 +10,7 @@
 # Usage from your repo:
 #   jobs:
 #     publish:
-#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@v1.0.11
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@v1.0.12
 #       with:
 #         module-pattern: 'cmp-'
 #         group-id: 'io.github.mobilebytelabs'
@@ -55,7 +55,7 @@ on:
         type: string
         default: 'CENTRAL_PORTAL'
       create-github-release:
-        description: 'Create a GitHub release per module'
+        description: 'Create a single GitHub release after all modules are published (flat vX.Y.Z tag for version resolver compatibility)'
         type: boolean
         default: false
     secrets:
@@ -221,7 +221,7 @@ jobs:
           java-version: ${{ inputs.java-version }}
           java-distribution: ${{ inputs.java-distribution }}
           sonatype-host: ${{ inputs.sonatype-host }}
-          create-github-release: ${{ inputs.create-github-release }}
+          create-github-release: 'false'
 
       - name: Module Summary
         if: success()
@@ -236,10 +236,48 @@ jobs:
           echo "### ❌ ${{ matrix.module }}" >> $GITHUB_STEP_SUMMARY
           echo "Failed to publish — check logs." >> $GITHUB_STEP_SUMMARY
 
+  # ─── GitHub Release (single flat tag vX.Y.Z) ────────────────────────────────
+  create-release:
+    name: Create GitHub Release
+    needs: [resolve-version, discover, publish]
+    runs-on: ubuntu-latest
+    if: ${{ inputs.create-github-release && needs.publish.result == 'success' }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build release body
+        id: body
+        run: |
+          VERSION="${{ needs.resolve-version.outputs.version }}"
+          MODULES_LIST="${{ needs.discover.outputs.modules_list }}"
+          BODY="## Published Modules\n\n"
+          IFS=',' read -ra MODS <<< "$MODULES_LIST"
+          for entry in "${MODS[@]}"; do
+            MODULE="${entry%%@*}"
+            BODY="${BODY}- \`io.github.mobilebytelabs:${MODULE}:${VERSION}\`\n"
+          done
+          BODY="${BODY}\n**Maven Central:** https://central.sonatype.com/search?q=io.github.mobilebytelabs&sort=published"
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.resolve-version.outputs.version }}
+          name: v${{ needs.resolve-version.outputs.version }}
+          body: ${{ steps.body.outputs.body }}
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GH_TOKEN || github.token }}
+
   # ─── Release summary ───────────────────────────────────────────────────────
   summary:
     name: Release Summary
-    needs: [resolve-version, discover, publish]
+    needs: [resolve-version, discover, publish, create-release]
     runs-on: ubuntu-latest
     if: always()
     steps:
