@@ -3,18 +3,24 @@
 # Discovers all publishable modules → auto-resolves version → runs CI gate →
 # publishes in parallel to Maven Central
 #
-# Version resolution (fully automatic):
-#   1. Maven Central → latest published version → bumps patch
-#   2. GitHub Releases → latest tag → bumps patch (for first Maven publish)
+# Version resolution (configurable via inputs, see below):
+#   1. inputs.version (explicit, no bump)
+#   2. gradle.properties (when gradle-properties-key is set)
+#   3. GitHub Releases (highest matching semver tag, patch-bumped)
+#   4. Maven Central (patch-bumped)
+#   5. Sanity check: resolved must be > latest on Maven Central
+#
+# See MobileByteLabs/mbl-actionhub-resolve-version@v1.1.0 for full reference.
 #
 # Usage from your repo:
 #   jobs:
 #     publish:
-#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@v1.0.12
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@v1.0.13
 #       with:
 #         module-pattern: 'cmp-'
 #         group-id: 'io.github.mobilebytelabs'
 #         artifact-id: 'cmp-clipboard'
+#         gradle-properties-key: 'kmptoolkit.version'   # recommended
 #       secrets: inherit
 
 name: Publish — KMP Library
@@ -42,6 +48,30 @@ on:
         description: 'Version bump type: patch (default), minor, or major'
         type: string
         default: 'patch'
+      version:
+        description: 'Explicit version override. If non-empty, used as-is (no bump). Highest priority.'
+        type: string
+        default: ''
+      version-source:
+        description: 'Resolution mode: auto (default), gradle-properties, github-releases, maven-central'
+        type: string
+        default: 'auto'
+      gradle-properties-path:
+        description: 'Path to gradle.properties (relative to repo root)'
+        type: string
+        default: 'gradle.properties'
+      gradle-properties-key:
+        description: 'Key in gradle.properties holding the version (e.g. kmptoolkit.version). Empty disables this source.'
+        type: string
+        default: ''
+      verify-against-maven:
+        description: 'Sanity check: fail if resolved version is not strictly greater than latest on Maven Central'
+        type: boolean
+        default: true
+      tag-pattern:
+        description: 'POSIX ERE for valid GitHub Release tags. Default matches vX.Y.Z and X.Y.Z.'
+        type: string
+        default: '^v?[0-9]+\.[0-9]+\.[0-9]+$'
       java-version:
         description: 'JDK version'
         type: string
@@ -84,13 +114,21 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
       current: ${{ steps.resolve.outputs.current }}
     steps:
+      - name: Checkout (for gradle.properties read)
+        uses: actions/checkout@v6
       - name: Resolve next version
         id: resolve
-        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.0.5
+        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.1.0
         with:
           group-id: ${{ inputs.group-id }}
           artifact-id: ${{ inputs.artifact-id }}
           bump: ${{ inputs.bump }}
+          version: ${{ inputs.version }}
+          version-source: ${{ inputs.version-source }}
+          gradle-properties-path: ${{ inputs.gradle-properties-path }}
+          gradle-properties-key: ${{ inputs.gradle-properties-key }}
+          verify-against-maven: ${{ inputs.verify-against-maven }}
+          tag-pattern: ${{ inputs.tag-pattern }}
 
   # ─── Discover publishable modules ──────────────────────────────────────────
   discover:
