@@ -10,7 +10,7 @@
 #   4. Maven Central (patch-bumped)
 #   5. Sanity check: resolved must be > latest on Maven Central
 #
-# See MobileByteLabs/mbl-actionhub-resolve-version@v1.1.0 for full reference.
+# See MobileByteLabs/mbl-actionhub-resolve-version@v1.1.1 for full reference.
 #
 # Usage from your repo:
 #   jobs:
@@ -137,7 +137,7 @@ jobs:
         uses: actions/checkout@v6
       - name: Resolve next version
         id: resolve
-        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.1.0
+        uses: MobileByteLabs/mbl-actionhub-resolve-version@v1.1.1
         with:
           group-id: ${{ inputs.group-id }}
           artifact-id: ${{ inputs.artifact-id }}
