@@ -72,6 +72,18 @@ on:
         description: 'POSIX ERE for valid GitHub Release tags. Default matches vX.Y.Z and X.Y.Z.'
         type: string
         default: '^v?[0-9]+\.[0-9]+\.[0-9]+$'
+      bump-after-release:
+        description: 'Open a PR bumping gradle-properties-key to the next version after a successful publish. Requires gradle-properties-key.'
+        type: boolean
+        default: false
+      next-bump-type:
+        description: 'Bump type for the post-release PR: patch (default), minor, major.'
+        type: string
+        default: 'patch'
+      bump-pr-base-branch:
+        description: 'Branch the bump PR targets. Defaults to the branch the publish workflow ran on.'
+        type: string
+        default: ''
       java-version:
         description: 'JDK version'
         type: string
@@ -104,6 +116,13 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+
+# Prevent two simultaneous publishes from racing on the same ref. Don't
+# cancel in-progress — Maven publishes are not safe to interrupt mid-flight.
+concurrency:
+  group: publish-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   # ─── Resolve next version from Maven Central ──────────────────────────────
@@ -349,3 +368,37 @@ jobs:
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "*[Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*" >> $GITHUB_STEP_SUMMARY
+
+  # ─── Auto-open bump PR for the next release cycle ──────────────────────────
+  # Runs only after every module publish + GH release succeeded, on the FIRST
+  # attempt of a workflow run (re-runs do NOT re-bump), and only if the caller
+  # opted in via bump-after-release + gradle-properties-key.
+  bump-next-version:
+    name: Open Bump PR (next cycle)
+    needs: [resolve-version, publish, create-release]
+    if: |
+      success() &&
+      inputs.bump-after-release == true &&
+      inputs.gradle-properties-key != '' &&
+      github.run_attempt == 1
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN || github.token }}
+
+      - name: Open bump PR
+        uses: MobileByteLabs/mbl-actionhub-bump-version@v1.0.0
+        with:
+          published-version: ${{ needs.resolve-version.outputs.version }}
+          properties-path: ${{ inputs.gradle-properties-path }}
+          properties-key: ${{ inputs.gradle-properties-key }}
+          bump-type: ${{ inputs.next-bump-type }}
+          base-branch: ${{ inputs.bump-pr-base-branch }}
+          github-token: ${{ secrets.GH_TOKEN || github.token }}
