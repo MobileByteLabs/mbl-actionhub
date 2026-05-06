@@ -36,6 +36,10 @@ on:
         description: 'Specific module to publish (leave empty for all matching modules)'
         type: string
         default: ''
+      module-path:
+        description: 'Exact relative path to a nested module (e.g. build-logic/flavor-plugin). When set, bypasses module-pattern glob discovery.'
+        type: string
+        default: ''
       group-id:
         description: 'Maven group ID (e.g. io.github.mobilebytelabs)'
         type: string
@@ -100,6 +104,10 @@ on:
         description: 'Create a single GitHub release after all modules are published (flat vX.Y.Z tag for version resolver compatibility)'
         type: boolean
         default: false
+      publish-gradle-plugin-portal:
+        description: 'Also publish to the Gradle Plugin Portal after Maven Central. Requires GRADLE_PUBLISH_KEY and GRADLE_PUBLISH_SECRET secrets.'
+        type: boolean
+        default: false
     secrets:
       MAVEN_CENTRAL_USERNAME:
         required: true
@@ -112,6 +120,10 @@ on:
       SIGNING_PASSWORD:
         required: true
       GH_TOKEN:
+        required: false
+      GRADLE_PUBLISH_KEY:
+        required: false
+      GRADLE_PUBLISH_SECRET:
         required: false
 
 permissions:
@@ -164,6 +176,7 @@ jobs:
       - name: Discover Publishable Modules
         id: discover
         run: |
+          MODULE_PATH="${{ inputs.module-path }}"
           PATTERN="${{ inputs.module-pattern }}"
           FILTER="${{ inputs.module }}"
           VERSION="${{ needs.resolve-version.outputs.version }}"
@@ -171,20 +184,30 @@ jobs:
           MODULES_LIST=""
           FIRST=true
 
-          for dir in ${PATTERN}*/; do
-            [ ! -d "$dir" ] && continue
-            grep -q "mavenPublishing" "${dir}build.gradle.kts" 2>/dev/null || continue
+          if [ -n "$MODULE_PATH" ]; then
+            # Direct path mode — bypass glob, use the exact nested module path.
+            # Gradle task path converts '/' separators to ':' (e.g. build-logic/flavor-plugin → :build-logic:flavor-plugin).
+            GRADLE_PATH=$(echo "$MODULE_PATH" | tr '/' ':')
+            ARTIFACT=$(grep 'coordinates(' "${MODULE_PATH}/build.gradle.kts" 2>/dev/null | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
+            [ -z "$ARTIFACT" ] && ARTIFACT="${MODULE_PATH##*/}"
+            ITEMS="{\"module\":\"$MODULE_PATH\",\"gradle-path\":\"$GRADLE_PATH\",\"version\":\"$VERSION\",\"artifact\":\"$ARTIFACT\"}"
+            MODULES_LIST="$MODULE_PATH@$VERSION"
+          else
+            for dir in ${PATTERN}*/; do
+              [ ! -d "$dir" ] && continue
+              grep -q "mavenPublishing" "${dir}build.gradle.kts" 2>/dev/null || continue
 
-            MODULE="${dir%/}"
-            [ -n "$FILTER" ] && [ "$MODULE" != "$FILTER" ] && continue
+              MODULE="${dir%/}"
+              [ -n "$FILTER" ] && [ "$MODULE" != "$FILTER" ] && continue
 
-            ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" 2>/dev/null | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
-            [ -z "$ARTIFACT" ] && ARTIFACT="$MODULE"
+              ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" 2>/dev/null | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
+              [ -z "$ARTIFACT" ] && ARTIFACT="$MODULE"
 
-            [ "$FIRST" = true ] && FIRST=false || { ITEMS="$ITEMS,"; MODULES_LIST="$MODULES_LIST,"; }
-            ITEMS="$ITEMS{\"module\":\"$MODULE\",\"version\":\"$VERSION\",\"artifact\":\"$ARTIFACT\"}"
-            MODULES_LIST="$MODULES_LIST$MODULE@$VERSION"
-          done
+              [ "$FIRST" = true ] && FIRST=false || { ITEMS="$ITEMS,"; MODULES_LIST="$MODULES_LIST,"; }
+              ITEMS="$ITEMS{\"module\":\"$MODULE\",\"gradle-path\":\"$MODULE\",\"version\":\"$VERSION\",\"artifact\":\"$ARTIFACT\"}"
+              MODULES_LIST="$MODULES_LIST$MODULE@$VERSION"
+            done
+          fi
 
           echo "matrix={\"include\":[$ITEMS]}" >> $GITHUB_OUTPUT
           echo "modules_list=$MODULES_LIST" >> $GITHUB_OUTPUT
@@ -237,13 +260,21 @@ jobs:
 
       - name: Run JVM Tests
         run: |
-          PATTERN="${{ inputs.module-pattern }}"
+          MODULE_PATH="${{ inputs.module-path }}"
           TASKS=""
-          for dir in ${PATTERN}*/; do
-            [ "$dir" = "${PATTERN}library/" ] && continue
-            [ -d "${dir}/src/jvmMain" ] || continue
-            TASKS="$TASKS :${dir%/}:jvmTest"
-          done
+          if [ -n "$MODULE_PATH" ]; then
+            if [ -d "${MODULE_PATH}/src/jvmMain" ]; then
+              GRADLE_PATH=$(echo "$MODULE_PATH" | tr '/' ':')
+              TASKS=":${GRADLE_PATH}:jvmTest"
+            fi
+          else
+            PATTERN="${{ inputs.module-pattern }}"
+            for dir in ${PATTERN}*/; do
+              [ "$dir" = "${PATTERN}library/" ] && continue
+              [ -d "${dir}/src/jvmMain" ] || continue
+              TASKS="$TASKS :${dir%/}:jvmTest"
+            done
+          fi
           if [ -z "$TASKS" ]; then
             echo "No modules with jvmMain — skipping"
             exit 0
@@ -265,7 +296,38 @@ jobs:
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
 
     steps:
+      # ── module-path mode: run everything inline for nested modules ────────────
+      - name: Checkout
+        if: ${{ inputs.module-path != '' }}
+        uses: actions/checkout@v6
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        if: ${{ inputs.module-path != '' }}
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+
+      - name: Setup Gradle
+        if: ${{ inputs.module-path != '' }}
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Publish nested module to Maven Central
+        if: ${{ inputs.module-path != '' }}
+        env:
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_KEY_ID }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_KEY_CONTENTS }}
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        run: |
+          ./gradlew :${{ matrix.gradle-path }}:publishAllPublicationsToMavenCentralRepository \
+            --no-daemon \
+            --no-configuration-cache
+
+      # ── module-pattern mode: delegate to the standard publish action ──────────
       - uses: MobileByteLabs/mbl-actionhub-publish-library-kmp@v1.0.1
+        if: ${{ inputs.module-path == '' }}
         with:
           module: ${{ matrix.module }}
           version: ${{ matrix.version }}
@@ -343,6 +405,7 @@ jobs:
 
       - name: Create Release Summary
         run: |
+          MODULE_PATH="${{ inputs.module-path }}"
           PATTERN="${{ inputs.module-pattern }}"
           VERSION="${{ needs.resolve-version.outputs.version }}"
           echo "# Maven Central Release" >> $GITHUB_STEP_SUMMARY
@@ -355,16 +418,22 @@ jobs:
           echo "| Module | Artifact | Version |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|----------|---------|" >> $GITHUB_STEP_SUMMARY
 
-          for dir in ${PATTERN}*/; do
-            [ ! -d "$dir" ] && continue
-            grep -q "mavenPublishing" "${dir}build.gradle.kts" 2>/dev/null || continue
-            MODULE="${dir%/}"
-            FILTER="${{ inputs.module }}"
-            [ -n "$FILTER" ] && [ "$MODULE" != "$FILTER" ] && continue
-            ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" 2>/dev/null | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
-            [ -z "$ARTIFACT" ] && ARTIFACT="$MODULE"
-            echo "| $MODULE | io.github.mobilebytelabs:$ARTIFACT | $VERSION |" >> $GITHUB_STEP_SUMMARY
-          done
+          if [ -n "$MODULE_PATH" ]; then
+            ARTIFACT=$(grep 'coordinates(' "${MODULE_PATH}/build.gradle.kts" 2>/dev/null | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
+            [ -z "$ARTIFACT" ] && ARTIFACT="${MODULE_PATH##*/}"
+            echo "| $MODULE_PATH | io.github.mobilebytelabs:$ARTIFACT | $VERSION |" >> $GITHUB_STEP_SUMMARY
+          else
+            for dir in ${PATTERN}*/; do
+              [ ! -d "$dir" ] && continue
+              grep -q "mavenPublishing" "${dir}build.gradle.kts" 2>/dev/null || continue
+              MODULE="${dir%/}"
+              FILTER="${{ inputs.module }}"
+              [ -n "$FILTER" ] && [ "$MODULE" != "$FILTER" ] && continue
+              ARTIFACT=$(grep 'coordinates(' "${dir}build.gradle.kts" 2>/dev/null | sed 's/.*coordinates([^,]*, "\([^"]*\)".*/\1/')
+              [ -z "$ARTIFACT" ] && ARTIFACT="$MODULE"
+              echo "| $MODULE | io.github.mobilebytelabs:$ARTIFACT | $VERSION |" >> $GITHUB_STEP_SUMMARY
+            done
+          fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "*[Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*" >> $GITHUB_STEP_SUMMARY
@@ -402,3 +471,56 @@ jobs:
           bump-type: ${{ inputs.next-bump-type }}
           base-branch: ${{ inputs.bump-pr-base-branch }}
           github-token: ${{ secrets.GH_TOKEN || github.token }}
+
+  # ─── Gradle Plugin Portal publish (opt-in) ─────────────────────────────────
+  publish-plugin-portal:
+    name: Publish to Gradle Plugin Portal
+    needs: publish
+    if: ${{ inputs.publish-gradle-plugin-portal == true && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Publish to Gradle Plugin Portal
+        env:
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_KEY_ID }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_KEY_CONTENTS }}
+        run: |
+          MODULE_PATH="${{ inputs.module-path }}"
+          if [ -n "$MODULE_PATH" ]; then
+            GRADLE_PATH=$(echo "$MODULE_PATH" | tr '/' ':')
+            TASK=":${GRADLE_PATH}:publishPlugins"
+          else
+            PATTERN="${{ inputs.module-pattern }}"
+            FILTER="${{ inputs.module }}"
+            TASK=""
+            for dir in ${PATTERN}*/; do
+              [ ! -d "$dir" ] && continue
+              grep -q "gradlePlugin" "${dir}build.gradle.kts" 2>/dev/null || continue
+              MODULE="${dir%/}"
+              [ -n "$FILTER" ] && [ "$MODULE" != "$FILTER" ] && continue
+              TASK="$TASK :${MODULE}:publishPlugins"
+            done
+          fi
+          if [ -z "$TASK" ]; then
+            echo "No modules with Gradle plugin publishing — skipping"
+            exit 0
+          fi
+          echo "Running: ./gradlew $TASK"
+          ./gradlew $TASK \
+            --no-daemon \
+            --no-configuration-cache \
+            -Pgradle.publish.key=${{ secrets.GRADLE_PUBLISH_KEY }} \
+            -Pgradle.publish.secret=${{ secrets.GRADLE_PUBLISH_SECRET }}

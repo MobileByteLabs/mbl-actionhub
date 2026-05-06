@@ -29,6 +29,10 @@ on:
         description: 'Prefix pattern for library modules (default: cmp-)'
         type: string
         default: 'cmp-'
+      module-path:
+        description: 'Exact relative path to a nested module (e.g. build-logic/flavor-plugin). When set, bypasses module-pattern glob discovery.'
+        type: string
+        default: ''
       java-version:
         description: 'JDK version'
         type: string
@@ -70,6 +74,16 @@ jobs:
       - name: Detect changed modules
         id: detect
         run: |
+          MODULE_PATH="${{ inputs.module-path }}"
+
+          # Direct path mode — always build the single known module, no glob needed.
+          if [ -n "$MODULE_PATH" ]; then
+            echo "build_all=false" >> $GITHUB_OUTPUT
+            echo "modules=$MODULE_PATH" >> $GITHUB_OUTPUT
+            echo "▶ Direct module path: $MODULE_PATH"
+            exit 0
+          fi
+
           PATTERN="${{ inputs.module-pattern }}"
 
           # workflow_call (publish gate) always builds everything
@@ -191,12 +205,18 @@ jobs:
 
       - name: Run JVM Tests
         run: |
+          MODULE_PATH="${{ inputs.module-path }}"
           PATTERN="${{ inputs.module-pattern }}"
           BUILD_ALL="${{ needs.detect-changes.outputs.build_all }}"
           MODULES="${{ needs.detect-changes.outputs.modules }}"
           TASKS=""
 
-          if [ "$BUILD_ALL" = "true" ] || [ -z "$MODULES" ]; then
+          if [ -n "$MODULE_PATH" ]; then
+            if [ -d "${MODULE_PATH}/src/jvmMain" ]; then
+              GRADLE_PATH=$(echo "$MODULE_PATH" | tr '/' ':')
+              TASKS=":${GRADLE_PATH}:jvmTest"
+            fi
+          elif [ "$BUILD_ALL" = "true" ] || [ -z "$MODULES" ]; then
             for dir in ${PATTERN}*/; do
               [ "$dir" = "${PATTERN}library/" ] && continue
               [ -d "${dir}src/jvmMain" ] || continue
@@ -258,12 +278,16 @@ jobs:
 
       - name: Run iOS Simulator Tests
         run: |
+          MODULE_PATH="${{ inputs.module-path }}"
           PATTERN="${{ inputs.module-pattern }}"
           BUILD_ALL="${{ needs.detect-changes.outputs.build_all }}"
           MODULES="${{ needs.detect-changes.outputs.modules }}"
           TASKS=""
 
-          if [ "$BUILD_ALL" = "true" ] || [ -z "$MODULES" ]; then
+          if [ -n "$MODULE_PATH" ]; then
+            GRADLE_PATH=$(echo "$MODULE_PATH" | tr '/' ':')
+            TASKS=":${GRADLE_PATH}:iosSimulatorArm64Test"
+          elif [ "$BUILD_ALL" = "true" ] || [ -z "$MODULES" ]; then
             for dir in ${PATTERN}*/; do
               [ "$dir" = "${PATTERN}library/" ] && continue
               [ -d "$dir" ] && TASKS="$TASKS :${dir%/}:iosSimulatorArm64Test"
@@ -324,12 +348,18 @@ jobs:
 
       - name: Run Linux Native Tests
         run: |
+          MODULE_PATH="${{ inputs.module-path }}"
           PATTERN="${{ inputs.module-pattern }}"
           BUILD_ALL="${{ needs.detect-changes.outputs.build_all }}"
           MODULES="${{ needs.detect-changes.outputs.modules }}"
           TASKS=""
 
-          if [ "$BUILD_ALL" = "true" ] || [ -z "$MODULES" ]; then
+          if [ -n "$MODULE_PATH" ]; then
+            if [ -d "${MODULE_PATH}/src/linuxMain" ]; then
+              GRADLE_PATH=$(echo "$MODULE_PATH" | tr '/' ':')
+              TASKS=":${GRADLE_PATH}:linuxX64Test"
+            fi
+          elif [ "$BUILD_ALL" = "true" ] || [ -z "$MODULES" ]; then
             for dir in ${PATTERN}*/; do
               [ "$dir" = "${PATTERN}library/" ] && continue
               [ -d "${dir}src/linuxMain" ] || continue
@@ -392,24 +422,35 @@ jobs:
 
       - name: Assemble All Libraries (All Targets)
         run: |
-          PATTERN="${{ inputs.module-pattern }}"
+          MODULE_PATH="${{ inputs.module-path }}"
           TASKS=""
-          for dir in ${PATTERN}*/; do
-            [ "$dir" = "${PATTERN}library/" ] && continue
-            [ -d "$dir" ] && TASKS="$TASKS :${dir%/}:assemble"
-          done
+          if [ -n "$MODULE_PATH" ]; then
+            GRADLE_PATH=$(echo "$MODULE_PATH" | tr '/' ':')
+            TASKS=":${GRADLE_PATH}:assemble"
+          else
+            PATTERN="${{ inputs.module-pattern }}"
+            for dir in ${PATTERN}*/; do
+              [ "$dir" = "${PATTERN}library/" ] && continue
+              [ -d "$dir" ] && TASKS="$TASKS :${dir%/}:assemble"
+            done
+          fi
           echo "Running: ./gradlew $TASKS --parallel"
           ./gradlew $TASKS --parallel
 
       - name: Build Summary
         run: |
-          PATTERN="${{ inputs.module-pattern }}"
+          MODULE_PATH="${{ inputs.module-path }}"
           echo "## Library Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Module | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|--------|" >> $GITHUB_STEP_SUMMARY
-          for dir in ${PATTERN}*/; do
-            if [ -d "$dir" ] && [ "$dir" != "${PATTERN}library/" ]; then
-              echo "| ${dir%/} | ✅ All targets compiled |" >> $GITHUB_STEP_SUMMARY
-            fi
-          done
+          if [ -n "$MODULE_PATH" ]; then
+            echo "| $MODULE_PATH | ✅ All targets compiled |" >> $GITHUB_STEP_SUMMARY
+          else
+            PATTERN="${{ inputs.module-pattern }}"
+            for dir in ${PATTERN}*/; do
+              if [ -d "$dir" ] && [ "$dir" != "${PATTERN}library/" ]; then
+                echo "| ${dir%/} | ✅ All targets compiled |" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+          fi
