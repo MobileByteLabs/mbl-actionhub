@@ -324,9 +324,6 @@ jobs:
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-          # Composite builds don't inherit root gradle.properties — pass Sonatype config explicitly.
-          ORG_GRADLE_PROJECT_SONATYPE_HOST: CENTRAL_PORTAL
-          ORG_GRADLE_PROJECT_SONATYPE_AUTOMATIC_RELEASE: "true"
         run: |
           export ORG_GRADLE_PROJECT_signingInMemoryKey=$(cat /tmp/mbl-signing-key.asc)
           ./gradlew :${{ matrix.gradle-path }}:publishAllPublicationsToMavenCentralRepository \
