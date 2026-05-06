@@ -312,18 +312,24 @@ jobs:
         if: ${{ inputs.module-path != '' }}
         uses: gradle/actions/setup-gradle@v6
 
+      - name: Decode GPG Key
+        if: ${{ inputs.module-path != '' }}
+        shell: bash
+        run: echo "${{ secrets.GPG_KEY_CONTENTS }}" | base64 -d > /tmp/mbl-signing-key.asc
+
       - name: Publish nested module to Maven Central
         if: ${{ inputs.module-path != '' }}
         env:
           ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_KEY_ID }}
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
-          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_KEY_CONTENTS }}
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
         run: |
+          export ORG_GRADLE_PROJECT_signingInMemoryKey=$(cat /tmp/mbl-signing-key.asc)
           ./gradlew :${{ matrix.gradle-path }}:publishAllPublicationsToMavenCentralRepository \
             --no-daemon \
             --no-configuration-cache
+          rm -f /tmp/mbl-signing-key.asc
 
       # ── module-pattern mode: delegate to the standard publish action ──────────
       - uses: MobileByteLabs/mbl-actionhub-publish-library-kmp@v1.0.1
