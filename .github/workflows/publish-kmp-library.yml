@@ -508,7 +508,7 @@ jobs:
           token: ${{ secrets.GH_TOKEN || github.token }}
 
       - name: Open bump PR
-        uses: MobileByteLabs/mbl-actionhub-bump-version@v1.1.0
+        uses: MobileByteLabs/mbl-actionhub-bump-version@v1.6.0
         with:
           published-version: ${{ needs.resolve-version.outputs.version }}
           properties-path: ${{ inputs.gradle-properties-path }}
