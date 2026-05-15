@@ -104,6 +104,16 @@ on:
         description: 'Create a single GitHub release after all modules are published (flat vX.Y.Z tag for version resolver compatibility)'
         type: boolean
         default: false
+      force-prerelease:
+        description: |
+          Override the pre-release flag on the GitHub Release. Default 'auto'
+          inspects the resolved version string and sets prerelease=true on
+          SemVer pre-release tags (-alpha.N / -beta.N / -rc.N). Set 'true' to
+          force prerelease=true (e.g. for unrecognised pre-release suffixes
+          like -snapshot.N). Set 'false' to force prerelease=false (e.g. for
+          a re-issued pre-release that has been promoted to GA quality).
+        type: string
+        default: 'auto'
       publish-gradle-plugin-portal:
         description: 'Also publish to the Gradle Plugin Portal after Maven Central. Requires GRADLE_PUBLISH_KEY and GRADLE_PUBLISH_SECRET secrets.'
         type: boolean
@@ -389,6 +399,35 @@ jobs:
           echo -e "$BODY" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Resolve pre-release flag
+        id: prerelease
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+          FORCE: ${{ inputs.force-prerelease }}
+        run: |
+          set -euo pipefail
+          # SemVer 2.0.0 pre-release suffixes recognised by mbl-actionhub:
+          # -alpha.N / -beta.N / -rc.N (matching mbl-actionhub-bump-version v1.6+).
+          case "$FORCE" in
+            true)  RESOLVED=true ;;
+            false) RESOLVED=false ;;
+            auto|"")
+              if [[ "$VERSION" =~ -alpha\.[0-9]+ ]] || \
+                 [[ "$VERSION" =~ -beta\.[0-9]+ ]] || \
+                 [[ "$VERSION" =~ -rc\.[0-9]+ ]]; then
+                RESOLVED=true
+              else
+                RESOLVED=false
+              fi
+              ;;
+            *)
+              echo "::error::force-prerelease must be one of: auto, true, false. Got: '$FORCE'"
+              exit 1
+              ;;
+          esac
+          echo "value=$RESOLVED" >> "$GITHUB_OUTPUT"
+          echo "Resolved prerelease=$RESOLVED for version '$VERSION' (force-prerelease='$FORCE')"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -396,7 +435,7 @@ jobs:
           name: v${{ needs.resolve-version.outputs.version }}
           body: ${{ steps.body.outputs.body }}
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.prerelease.outputs.value }}
           token: ${{ secrets.GH_TOKEN || github.token }}
 
   # ─── Release summary ───────────────────────────────────────────────────────
