@@ -78,6 +78,34 @@ jobs:
     secrets: inherit
 ```
 
+### Pre-release-aware GitHub Release flag
+
+When `create-github-release: true`, the workflow auto-flags SemVer pre-release tags as pre-releases on the GitHub UI + RSS feed + "Latest release" pointer.
+
+| Resolved version | `prerelease` on the GitHub Release |
+|---|---|
+| `2.2.0-alpha.0` | `true` (auto-detected) |
+| `2.2.0-beta.1` | `true` (auto-detected) |
+| `2.2.0-rc.2` | `true` (auto-detected) |
+| `2.2.0` | `false` (GA — auto-detected) |
+| `2.2.1-snapshot.1` | `false` (unrecognised suffix — auto-detected falls through to GA) |
+
+Override the auto-detection with `force-prerelease`:
+
+```yaml
+jobs:
+  publish:
+    uses: MobileByteLabs/mbl-actionhub/.github/workflows/publish-kmp-library.yml@main
+    with:
+      create-github-release: true
+      force-prerelease: 'auto'   # default — auto-detect via version suffix
+      # force-prerelease: 'true'  # force prerelease=true (e.g. unrecognised pre-release suffix)
+      # force-prerelease: 'false' # force prerelease=false (re-issued pre-release promoted to GA quality)
+    secrets: inherit
+```
+
+Pre-release detection mirrors `mbl-actionhub-bump-version` v1.6+'s recognised suffix list: `-alpha.N`, `-beta.N`, `-rc.N` (period-separated counter form). Unrecognised suffixes (`-snapshot.N`, `-pre.N`, custom labels) auto-resolve to `prerelease=false` — override with `force-prerelease: 'true'` if you want them flagged.
+
 ### Required secrets
 
 | Secret | Description |
