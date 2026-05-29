@@ -11,6 +11,7 @@ The counterpart to [`mbl-actionhub-publish-library-kmp`](https://github.com/Mobi
 | [`ci-kmp-library.yml`](.github/workflows/ci-kmp-library.yml) | CI: quality + platform tests + full assemble | PR + push |
 | [`publish-kmp-library.yml`](.github/workflows/publish-kmp-library.yml) | Publish all modules to Maven Central in parallel | Release / schedule |
 | [`pr-check-kmp.yml`](.github/workflows/pr-check-kmp.yml) | Fast PR gate (JVM only, skips iOS by default) | PR |
+| [`release-notes-from-changelog.yml`](.github/workflows/release-notes-from-changelog.yml) | Prepend matching CHANGELOG.md section to GitHub release notes | Release event |
 
 ---
 
@@ -135,6 +136,52 @@ jobs:
   pr-check:
     uses: MobileByteLabs/mbl-actionhub/.github/workflows/pr-check-kmp.yml@main
 ```
+
+---
+
+## Release Notes — `release-notes-from-changelog.yml`
+
+Prepends the matching `## [<version>]` (or `## [Unreleased]` fallback) section from `CHANGELOG.md` as a `## What's changed` block above the publish workflow's auto-generated "Published Modules" artifact list. Idempotent — re-runs on the same release exit cleanly.
+
+```yaml
+# .github/workflows/release-notes.yml  (in your library repo)
+name: Release Notes
+on:
+  release:
+    types: [created, published, edited]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to enrich (e.g. v3.4.0)'
+        required: true
+        type: string
+
+jobs:
+  enrich:
+    uses: MobileByteLabs/mbl-actionhub/.github/workflows/release-notes-from-changelog.yml@main
+    permissions:
+      contents: write
+    with:
+      tag: ${{ github.event.release.tag_name || inputs.tag }}
+    secrets: inherit
+```
+
+### Inputs
+
+| Input | Default | Description |
+|---|---|---|
+| `tag` | (required) | Release tag to enrich (e.g. `v3.4.0`) |
+| `changelog-path` | `CHANGELOG.md` | Path relative to repo root |
+| `heading-label` | `What's changed` | Heading text for the prepended block (no leading `##`) |
+| `separator` | `---` | Markdown separator between changelog block and existing body |
+| `fail-when-missing` | `false` | Fail the job if no CHANGELOG section is found (default: no-op) |
+
+### Section matching strategy
+
+1. `## [<version>]` (tag with leading `v` stripped) — preferred
+2. `## [Unreleased]` — fallback for consumers who haven't curated CHANGELOG into versioned sections yet
+
+The reusable workflow checks out the repo at the release tag — so the CHANGELOG it reads is the one frozen at release time, not whatever's on the default branch HEAD (which may already have a bump-after-release commit).
 
 ---
 

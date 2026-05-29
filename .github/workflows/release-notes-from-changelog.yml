@@ -1,0 +1,159 @@
+# Reusable workflow — enrich a GitHub release body with the matching section
+# from CHANGELOG.md.
+#
+# The mbl-actionhub publish-kmp-library reusable workflow creates releases with
+# only a "Published Modules" artifact list. This workflow prepends a human-readable
+# "What's changed" section (extracted from CHANGELOG.md) above that list so readers
+# see the narrative before the artifact dump.
+#
+# Section matching strategy (in order):
+#   1. `## [<version>]` (semver tag without leading `v`)        — preferred
+#   2. `## [Unreleased]`                                         — fallback for
+#      consumers who haven't curated CHANGELOG into versioned sections yet
+#
+# Idempotent: if the release body already starts with the configured heading
+# (default `## What's changed`), the workflow exits 0 without re-editing.
+#
+# Usage from your repo (`.github/workflows/release-notes.yml`):
+#
+#   name: Release Notes
+#   on:
+#     release:
+#       types: [created, published, edited]
+#     workflow_dispatch:
+#       inputs:
+#         tag:
+#           description: 'Release tag to enrich (e.g. v3.4.0)'
+#           required: true
+#           type: string
+#   jobs:
+#     enrich:
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/release-notes-from-changelog.yml@v1.7.0
+#       permissions:
+#         contents: write
+#       with:
+#         tag: ${{ github.event.release.tag_name || inputs.tag }}
+#       secrets: inherit
+
+name: Release Notes — Enrich from CHANGELOG
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag to enrich (e.g. v3.4.0)'
+        required: true
+        type: string
+      changelog-path:
+        description: 'Path to CHANGELOG.md relative to repo root'
+        type: string
+        default: 'CHANGELOG.md'
+      heading-label:
+        description: 'Heading for the prepended changelog block (omit leading `##`)'
+        type: string
+        default: "What's changed"
+      separator:
+        description: 'Markdown separator inserted between the changelog and the existing release body'
+        type: string
+        default: '---'
+      fail-when-missing:
+        description: 'Fail the job if no matching CHANGELOG section is found (default: false → no-op)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  enrich:
+    name: Enrich release ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout at release tag
+        uses: actions/checkout@v4
+        with:
+          # Check out the commit the release was tagged on — CHANGELOG.md at
+          # that point is the canonical source, not whatever's on the default
+          # branch HEAD (which may already have a bump-after-release commit).
+          ref: ${{ inputs.tag }}
+
+      - name: Enrich release notes from CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          CHANGELOG_PATH: ${{ inputs.changelog-path }}
+          HEADING: ${{ inputs.heading-label }}
+          SEPARATOR: ${{ inputs.separator }}
+          FAIL_WHEN_MISSING: ${{ inputs.fail-when-missing }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          echo "Enriching release $TAG (version=$VERSION) from $CHANGELOG_PATH"
+
+          if [ ! -f "$CHANGELOG_PATH" ]; then
+              echo "::warning::CHANGELOG file not found at $CHANGELOG_PATH"
+              if [ "$FAIL_WHEN_MISSING" = "true" ]; then exit 1; fi
+              exit 0
+          fi
+
+          # Extract a section from the CHANGELOG. Returns content between the
+          # matching `## [...]` heading and the next `## [...]` heading.
+          extract_section() {
+              local pattern="$1"
+              awk -v pat="$pattern" '
+                  BEGIN { capturing = 0 }
+                  /^## \[/ {
+                      if (capturing) exit
+                      if ($0 ~ pat) { capturing = 1; next }
+                  }
+                  capturing { print }
+              ' "$CHANGELOG_PATH"
+          }
+
+          # Try [<version>] first (post-bump convention), then [Unreleased].
+          BODY=$(extract_section "\\[$VERSION\\]")
+          if [ -z "$(echo "$BODY" | tr -d '[:space:]')" ]; then
+              echo "No [$VERSION] section found, trying [Unreleased]"
+              BODY=$(extract_section "\\[Unreleased\\]")
+          fi
+
+          if [ -z "$(echo "$BODY" | tr -d '[:space:]')" ]; then
+              echo "::warning::No matching CHANGELOG section for $VERSION or Unreleased"
+              if [ "$FAIL_WHEN_MISSING" = "true" ]; then exit 1; fi
+              exit 0
+          fi
+
+          # Trim trailing blank lines from the extracted block.
+          BODY=$(echo "$BODY" | awk '
+              { lines[NR] = $0 }
+              END {
+                  end = NR
+                  while (end > 0 && lines[end] ~ /^[[:space:]]*$/) end--
+                  for (i = 1; i <= end; i++) print lines[i]
+              }
+          ')
+
+          # Idempotency check — skip if we've already enriched this release.
+          EXISTING=$(gh release view "$TAG" --json body --jq .body)
+          EXPECTED_HEADING="## $HEADING"
+          if echo "$EXISTING" | head -1 | grep -qF "$EXPECTED_HEADING"; then
+              echo "Release notes already enriched ($EXPECTED_HEADING) — no-op"
+              exit 0
+          fi
+
+          # Compose the new body: heading + changelog + separator + existing.
+          {
+              echo "$EXPECTED_HEADING"
+              echo ""
+              echo "$BODY"
+              echo ""
+              echo "$SEPARATOR"
+              echo ""
+              echo "$EXISTING"
+          } > /tmp/release-body.md
+
+          gh release edit "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --notes-file /tmp/release-body.md
+
+          echo "Release $TAG enriched with $EXPECTED_HEADING section"
