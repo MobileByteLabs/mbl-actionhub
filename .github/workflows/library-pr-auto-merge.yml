@@ -1,0 +1,89 @@
+name: Library PR Auto-merge
+
+# Reusable workflow — tiered semver auto-merge for library PRs (consumer-library-ai-bridge epic, AC #23, D18).
+# Patch bumps auto-merge on CI green; minor + major bumps get labeled `human-review-required`.
+# Caller: library repo's PR-opened workflow that adds the `auto-merge` label.
+#
+# Authored 2026-05-30 (Phase 05 T2 of consumer-library-ai-bridge epic).
+# Tag: v1.8.0+
+
+on:
+  workflow_call:
+    inputs:
+      allowed_tiers:
+        description: 'Comma-separated list of semver tiers to auto-merge: patch | patch,minor | patch,minor,major'
+        type: string
+        default: 'patch'
+      current_version_path:
+        description: 'Repo-relative path to the file containing the current version (e.g. version.properties)'
+        type: string
+        default: 'gradle.properties'
+      version_pattern:
+        description: 'grep -E pattern to extract version (capture group 1 = version)'
+        type: string
+        default: '^(?:mavenPublishVersion|version|VERSION)\s*=\s*([0-9]+\.[0-9]+\.[0-9]+[a-z0-9.-]*)'
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Wait for CI to go green
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr checks ${{ github.event.pull_request.number }} --watch --required
+
+      - name: Determine semver tier
+        id: semver
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Read new version from the PR's checked-out tree
+          NEW_VER="$(grep -oE '${{ inputs.version_pattern }}' '${{ inputs.current_version_path }}' | sed -nE 's/.*= *([0-9.][a-z0-9.-]*).*/\1/p' | head -1)"
+          # Read old version from main branch
+          gh api repos/${{ github.repository }}/contents/${{ inputs.current_version_path }}?ref=main \
+            --jq '.content' | base64 -d > /tmp/main-version-file
+          OLD_VER="$(grep -oE '${{ inputs.version_pattern }}' /tmp/main-version-file | sed -nE 's/.*= *([0-9.][a-z0-9.-]*).*/\1/p' | head -1)"
+
+          # Strip pre-release suffix for comparison
+          OLD_BASE="${OLD_VER%-*}"
+          NEW_BASE="${NEW_VER%-*}"
+          OLD_MAJOR="${OLD_BASE%%.*}"; OLD_REST="${OLD_BASE#*.}"; OLD_MINOR="${OLD_REST%%.*}"; OLD_PATCH="${OLD_REST#*.}"
+          NEW_MAJOR="${NEW_BASE%%.*}"; NEW_REST="${NEW_BASE#*.}"; NEW_MINOR="${NEW_REST%%.*}"; NEW_PATCH="${NEW_REST#*.}"
+
+          if [[ "$NEW_MAJOR" -gt "$OLD_MAJOR" ]]; then TIER=major
+          elif [[ "$NEW_MINOR" -gt "$OLD_MINOR" ]]; then TIER=minor
+          elif [[ "$NEW_PATCH" -gt "$OLD_PATCH" ]]; then TIER=patch
+          else TIER=none; fi
+
+          echo "old=${OLD_VER} new=${NEW_VER} tier=${TIER}"
+          echo "tier=${TIER}" >> $GITHUB_OUTPUT
+          echo "old=${OLD_VER}" >> $GITHUB_OUTPUT
+          echo "new=${NEW_VER}" >> $GITHUB_OUTPUT
+
+      - name: Auto-merge if tier allowed
+        if: contains(inputs.allowed_tiers, steps.semver.outputs.tier)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Tier ${{ steps.semver.outputs.tier }} is in allowed list (${{ inputs.allowed_tiers }}) — auto-merging"
+          gh pr merge ${{ github.event.pull_request.number }} --squash --delete-branch --admin
+
+      - name: Label for human review (tier outside allow-list)
+        if: ${{ !contains(inputs.allowed_tiers, steps.semver.outputs.tier) }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Tier ${{ steps.semver.outputs.tier }} NOT in allowed list (${{ inputs.allowed_tiers }}) — labeling for review"
+          gh pr edit ${{ github.event.pull_request.number }} --add-label human-review-required
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "🛑 Auto-merge gated — semver ${{ steps.semver.outputs.tier }} bump (${{ steps.semver.outputs.old }} → ${{ steps.semver.outputs.new }}) exceeds allowed tiers (${{ inputs.allowed_tiers }}). Human review required."

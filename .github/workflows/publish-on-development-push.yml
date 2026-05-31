@@ -1,0 +1,74 @@
+name: Publish on development push
+
+# Reusable workflow — event-driven publish trigger (consumer-library-ai-bridge epic, AC #24).
+# Eliminates the weekly-cron wait between merge and publish.
+# Caller: library repo's push-to-development workflow → invokes this with library-specific publish workflow name.
+#
+# Authored 2026-05-30 (Phase 05 T3 of consumer-library-ai-bridge epic).
+# Tag: v1.8.0+
+
+on:
+  workflow_call:
+    inputs:
+      publish_workflow_name:
+        description: 'Library publish workflow filename (e.g. publish.yml)'
+        type: string
+        default: 'publish.yml'
+      debounce_minutes:
+        description: 'Skip publish if last successful publish was within N minutes (prevents burst-publish on rapid merges)'
+        type: number
+        default: 30
+      target_ref:
+        description: 'Branch to publish from'
+        type: string
+        default: 'development'
+
+jobs:
+  debounce-then-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check debounce window
+        id: debounce
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          LAST_RUN_TS="$(gh run list \
+            --workflow=${{ inputs.publish_workflow_name }} \
+            --branch=${{ inputs.target_ref }} \
+            --status=success \
+            --limit 1 \
+            --json updatedAt \
+            --jq '.[0].updatedAt' 2>/dev/null || echo "")"
+
+          if [[ -z "$LAST_RUN_TS" ]]; then
+            echo "No prior successful publish — proceeding"
+            echo "debounced=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          LAST_SECS=$(date -u -d "$LAST_RUN_TS" +%s 2>/dev/null || date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$LAST_RUN_TS" +%s)
+          NOW_SECS=$(date -u +%s)
+          DELTA=$(( NOW_SECS - LAST_SECS ))
+          DEBOUNCE_SECS=$(( ${{ inputs.debounce_minutes }} * 60 ))
+
+          if [[ "$DELTA" -lt "$DEBOUNCE_SECS" ]]; then
+            echo "Last publish was ${DELTA}s ago (< ${DEBOUNCE_SECS}s debounce window) — SKIPPING"
+            echo "debounced=true" >> $GITHUB_OUTPUT
+          else
+            echo "Last publish was ${DELTA}s ago (>= ${DEBOUNCE_SECS}s) — PROCEEDING"
+            echo "debounced=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger publish workflow
+        if: steps.debounce.outputs.debounced != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run ${{ inputs.publish_workflow_name }} --ref ${{ inputs.target_ref }}
+          echo "Dispatched ${{ inputs.publish_workflow_name }} on ${{ inputs.target_ref }}"

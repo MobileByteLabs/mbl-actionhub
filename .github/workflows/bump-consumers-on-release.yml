@@ -1,0 +1,96 @@
+name: Bump Consumers on Release
+
+# Reusable workflow — post-publish fan-out (consumer-library-ai-bridge epic, AC #9, #25).
+# Caller: library's publish.yml after publish-step succeeds.
+# Polls Maven Central for the version's availability (max 30 min), then dispatches per-consumer
+# bump-on-upstream-release.yml via cross-repo workflow_dispatch.
+#
+# Authored 2026-05-30 (Phase 05 T1 of consumer-library-ai-bridge epic).
+# Tag: v1.8.0+
+
+on:
+  workflow_call:
+    inputs:
+      library:
+        description: 'Library name (e.g. kmp-toolkit)'
+        type: string
+        required: true
+      new_version:
+        description: 'Version that was just published (e.g. 3.4.1)'
+        type: string
+        required: true
+      consumers_json:
+        description: 'JSON array of consumer repo slugs (e.g. ["mifos-x/kmp-project-template","mbs/election-india"])'
+        type: string
+        required: true
+      maven_artifact:
+        description: 'Maven artifact ID for poll (e.g. io.github.mobilebytelabs:cmp-share)'
+        type: string
+        required: true
+      poll_max_minutes:
+        description: 'Maximum minutes to poll Maven Central for version availability'
+        type: number
+        default: 30
+      poll_interval_seconds:
+        description: 'Seconds between Maven polls'
+        type: number
+        default: 60
+    secrets:
+      GH_CROSS_REPO_PAT:
+        description: 'Personal access token with repo + workflow scope for cross-repo dispatch'
+        required: true
+
+jobs:
+  poll-maven-availability:
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.poll.outputs.available }}
+    steps:
+      - id: poll
+        name: Poll Maven Central for ${{ inputs.maven_artifact }}:${{ inputs.new_version }}
+        run: |
+          set -euo pipefail
+          ARTIFACT_PATH="$(echo '${{ inputs.maven_artifact }}' | tr ':.' '/.')"
+          # Convert e.g. "io.github.mobilebytelabs:cmp-share" → "io/github/mobilebytelabs/cmp-share"
+          ARTIFACT_URL_PATH="$(echo '${{ inputs.maven_artifact }}' | awk -F: '{ gsub(/\./, "/", $1); print $1"/"$2 }')"
+          URL="https://repo1.maven.org/maven2/${ARTIFACT_URL_PATH}/${{ inputs.new_version }}/${ARTIFACT_URL_PATH##*/}-${{ inputs.new_version }}.pom"
+
+          MAX_ATTEMPTS=${{ inputs.poll_max_minutes }}
+          INTERVAL=${{ inputs.poll_interval_seconds }}
+
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            echo "Attempt ${i}/${MAX_ATTEMPTS}: GET ${URL}"
+            if curl -sf -o /dev/null "$URL"; then
+              echo "✓ Maven Central has ${{ inputs.maven_artifact }}:${{ inputs.new_version }}"
+              echo "available=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            sleep $INTERVAL
+          done
+
+          echo "✗ Maven poll timed out after ${MAX_ATTEMPTS} minutes"
+          echo "available=false" >> $GITHUB_OUTPUT
+          exit 1
+
+  dispatch-per-consumer-bumps:
+    needs: poll-maven-availability
+    if: needs.poll-maven-availability.outputs.available == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        consumer: ${{ fromJson(inputs.consumers_json) }}
+    steps:
+      - name: Dispatch bump-on-upstream-release.yml for ${{ matrix.consumer }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_CROSS_REPO_PAT }}
+        run: |
+          set -euo pipefail
+          echo "Dispatching bump for ${{ matrix.consumer }}"
+          gh workflow run bump-on-upstream-release.yml \
+            --repo "${{ matrix.consumer }}" \
+            --ref main \
+            -f library="${{ inputs.library }}" \
+            -f new_version="${{ inputs.new_version }}" \
+            -f maven_artifact="${{ inputs.maven_artifact }}" \
+            || echo "WARN: dispatch failed for ${{ matrix.consumer }} — workflow may not be installed (run /lib-install-bump-workflow)"
