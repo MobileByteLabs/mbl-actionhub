@@ -1,0 +1,62 @@
+name: Sync docs to Wiki
+
+# Reusable workflow — mirrors a caller repo's docs/ to its GitHub Wiki.
+#
+# This is the consumer entry point. Internally delegates to the composite
+# action MobileByteLabs/mbl-actionhub-docshub which does the actual rewriting
+# + wiki push. Same layering pattern as bump-consumers-on-release.yml
+# (which uses MobileByteLabs/mbl-actionhub-bump-version composite).
+#
+# Caller bootstrap (one-time, in the consumer's GitHub UI):
+#   1. Settings → Features → Wikis (enable checkbox)
+#   2. Wiki tab → "Create the first page" → save anything ("Home" / "TBD").
+#      This initializes the underlying `{repo}.wiki.git`. Without it, the
+#      composite's wiki-push step fails with "Repository not found".
+#
+# Caller usage:
+#   # .github/workflows/sync-docs-to-wiki.yml in YOUR repo:
+#   name: Sync docs to Wiki
+#   on:
+#     push:
+#       branches: [development]
+#       paths: ['docs/**']
+#     workflow_dispatch:
+#   permissions:
+#     contents: write
+#   jobs:
+#     sync:
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/sync-docs-to-wiki.yml@v1.8.0
+#
+# Authored 2026-06-02 (sync-docs-to-wiki consolidation).
+# Tag: v1.8.0+
+# Composite-action dep: MobileByteLabs/mbl-actionhub-docshub@v0.2.0
+
+on:
+  workflow_call:
+    inputs:
+      docs-dir:
+        description: 'Source docs directory in the caller repo (relative path)'
+        type: string
+        default: 'docs'
+      sidebar-mode:
+        description: 'auto (generate _Sidebar.md if absent) | consumer-authored (require docs/_Sidebar.md, fail otherwise) | none (skip sidebar)'
+        type: string
+        default: 'auto'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Mirror docs/ → wiki
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+
+      - name: Sync docs to wiki
+        uses: MobileByteLabs/mbl-actionhub-docshub@v0.2.0
+        with:
+          docs-dir: ${{ inputs.docs-dir }}
+          sidebar-mode: ${{ inputs.sidebar-mode }}
+          token: ${{ secrets.GITHUB_TOKEN }}
