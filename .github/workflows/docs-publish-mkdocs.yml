@@ -103,7 +103,14 @@ jobs:
       - name: Disable Jekyll on Pages artifact (belt-and-suspenders)
         run: touch ${{ inputs.site-dir }}/.nojekyll
 
+      # enablement: true auto-enables Pages on first run if the consumer has
+      # forgotten the one-time "Settings → Pages → Source: GitHub Actions" flip.
+      # Without this, configure-pages errors with "Get Pages site failed" and
+      # we have to chase the consumer to flip the setting manually. With it,
+      # first-merge → site-live works zero-touch.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
