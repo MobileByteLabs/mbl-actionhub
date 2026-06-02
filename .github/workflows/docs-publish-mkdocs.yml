@@ -1,0 +1,121 @@
+name: Publish docs (mkdocs → GitHub Pages)
+
+# Reusable workflow — builds a caller repo's mkdocs site and deploys it
+# to that repo's GitHub Pages environment.
+#
+# Layering: pure reusable workflow (no composite-action sidecar). The mkdocs
+# build is a 3-step shell operation (setup-python → pip install → mkdocs build),
+# so the indirection of an action.yml composite was not worth it. Same shape
+# as ci-kmp-library.yml / pr-check-kmp.yml.
+#
+# Caller bootstrap (one-time, in the consumer's GitHub UI):
+#   1. Settings → Pages → Source: "GitHub Actions" (build_type=workflow). The
+#      first run will switch the repo to workflow mode automatically if it was
+#      on legacy Jekyll, but only AFTER one run completes; doing it via the
+#      Pages settings dropdown is a cleaner one-step migration.
+#   2. Confirm the repo has a docs/requirements.txt (pinned mkdocs deps) and a
+#      mkdocs.yml at the repo root.
+#
+# Caller usage:
+#   # .github/workflows/docs-publish.yml in YOUR repo:
+#   name: Publish docs (mkdocs → GitHub Pages)
+#   on:
+#     push:
+#       branches: [development]
+#       paths:
+#         - 'docs/**'
+#         - 'mkdocs.yml'
+#         - 'cmp-*/README.md'
+#         - 'cmp-*/DEVELOPMENT.md'
+#         - '.github/workflows/docs-publish.yml'
+#     workflow_dispatch:
+#   permissions:
+#     contents: read
+#     pages: write
+#     id-token: write
+#   jobs:
+#     publish:
+#       uses: MobileByteLabs/mbl-actionhub/.github/workflows/docs-publish-mkdocs.yml@v1.9.0
+#
+# Authored 2026-06-02 (docs-publish consolidation).
+# Tag: v1.9.0+
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: 'Python interpreter version for mkdocs build'
+        type: string
+        default: '3.11'
+      requirements-path:
+        description: 'Path (relative to caller repo root) to pinned mkdocs requirements file'
+        type: string
+        default: 'docs/requirements.txt'
+      mkdocs-config:
+        description: 'Path (relative to caller repo root) to mkdocs.yml'
+        type: string
+        default: 'mkdocs.yml'
+      site-dir:
+        description: 'Output directory mkdocs builds into (must match site_dir in mkdocs.yml if overridden there)'
+        type: string
+        default: 'site'
+      strict:
+        description: 'Build mkdocs with --strict (fail on broken links / missing nav targets). Set false if your docs site has long-tail link health issues you have not yet triaged.'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# `pages` is the GitHub-recommended group name for Pages-deploy concurrency.
+# Two Pages deploys for the same repo cannot run simultaneously — let the
+# newest superseded deploy finish so the artifact is consistent.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build mkdocs site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: pip
+          cache-dependency-path: ${{ inputs.requirements-path }}
+
+      - name: Install mkdocs + plugins from pinned requirements
+        run: pip install -r ${{ inputs.requirements-path }}
+
+      - name: Build site
+        run: |
+          if [ "${{ inputs.strict }}" = "true" ]; then
+            mkdocs build --strict --config-file ${{ inputs.mkdocs-config }}
+          else
+            mkdocs build --config-file ${{ inputs.mkdocs-config }}
+          fi
+
+      - name: Disable Jekyll on Pages artifact (belt-and-suspenders)
+        run: touch ${{ inputs.site-dir }}/.nojekyll
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ inputs.site-dir }}
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

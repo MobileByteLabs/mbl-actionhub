@@ -12,6 +12,8 @@ The counterpart to [`mbl-actionhub-publish-library-kmp`](https://github.com/Mobi
 | [`publish-kmp-library.yml`](.github/workflows/publish-kmp-library.yml) | Publish all modules to Maven Central in parallel | Release / schedule |
 | [`pr-check-kmp.yml`](.github/workflows/pr-check-kmp.yml) | Fast PR gate (JVM only, skips iOS by default) | PR |
 | [`release-notes-from-changelog.yml`](.github/workflows/release-notes-from-changelog.yml) | Prepend matching CHANGELOG.md section as "What's changed" above the auto-generated release body | Release event |
+| [`docs-publish-mkdocs.yml`](.github/workflows/docs-publish-mkdocs.yml) | Build a caller's mkdocs site + deploy to its GitHub Pages | push / workflow_dispatch |
+| [`sync-docs-to-wiki.yml`](.github/workflows/sync-docs-to-wiki.yml) | Mirror caller's docs/ → its GitHub Wiki (delegates to `mbl-actionhub-docshub` composite) | push / workflow_dispatch |
 
 ---
 
