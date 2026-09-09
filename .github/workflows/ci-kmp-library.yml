@@ -94,11 +94,20 @@ jobs:
             exit 0
           fi
 
-          # Push to main/development/master always builds everything.
+          # Push to the repository's DEFAULT branch always builds everything.
           # Every merge to the main branch must be fully verified — no skipping.
+          #
+          # Derived from github.event.repository.default_branch rather than a hardcoded
+          # name list: consumer repos use main / master / dev / develop / development, and a
+          # hardcoded list silently degrades any repo whose branch is not on it — the merge
+          # falls through to the HEAD~1 diff below and only changed modules get built, which
+          # is exactly the "no skipping" this branch exists to prevent. The literal list is
+          # kept as a fallback for events where default_branch is unavailable.
           if [ "${{ github.event_name }}" = "push" ]; then
             BRANCH="${GITHUB_REF#refs/heads/}"
-            if echo "$BRANCH" | grep -qE "^(main|master|development)$"; then
+            DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+            if [ -n "$DEFAULT_BRANCH" ] && [ "$BRANCH" = "$DEFAULT_BRANCH" ] ||
+               echo "$BRANCH" | grep -qE "^(main|master|dev|develop|development)$"; then
               echo "build_all=true" >> $GITHUB_OUTPUT
               echo "modules=" >> $GITHUB_OUTPUT
               echo "▶ Push to $BRANCH — building all modules"
@@ -111,7 +120,11 @@ jobs:
             BASE_SHA=$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)
           else
             # PRs: diff against the target branch tip for accurate changed-file detection
-            BASE_SHA=$(git merge-base HEAD "origin/${{ github.base_ref || 'development' }}" 2>/dev/null || git rev-parse HEAD~1)
+            # base_ref is set for pull_request events; for anything else fall back to the
+            # repo's real default branch. The previous hardcoded 'development' does not exist
+            # in repos that renamed to dev, so merge-base failed, detection silently fell back
+            # to HEAD~1, and change detection became "last commit only".
+            BASE_SHA=$(git merge-base HEAD "origin/${{ github.base_ref || github.event.repository.default_branch }}" 2>/dev/null || git rev-parse HEAD~1)
           fi
           CHANGED=$(git diff --name-only "$BASE_SHA" HEAD)
 
