@@ -5,7 +5,7 @@
 #
 # Slow gate (opt-in — pre-release / nightly):
 #   + run-ios-tests: true   → iosSimulatorArm64Test on macos-14
-#   + run-linux-tests: true → linuxX64Test on ubuntu-latest
+#   + run-linux-tests: true → linuxX64Test on ubuntu-26.04
 #
 # Rationale: compile-all-targets catches missing actuals / type errors on every platform.
 # JVM tests validate 95% of common logic. iOS/Linux test execution is opt-in for release gates.
@@ -61,7 +61,7 @@ jobs:
   # ─── Detect changed modules ────────────────────────────────────────────────
   detect-changes:
     name: Detect Changed Modules
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       modules: ${{ steps.detect.outputs.modules }}
       build_all: ${{ steps.detect.outputs.build_all }}
@@ -147,7 +147,7 @@ jobs:
   # ─── Code quality ──────────────────────────────────────────────────────────
   quality:
     name: Code Quality
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     needs: detect-changes
     if: ${{ inputs.run-quality }}
@@ -188,7 +188,7 @@ jobs:
       always() &&
       needs.quality.result != 'failure' &&
       needs.detect-changes.outputs.modules != 'NONE'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -324,7 +324,7 @@ jobs:
       always() &&
       needs.quality.result != 'failure' &&
       needs.detect-changes.outputs.modules != 'NONE'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - name: Checkout

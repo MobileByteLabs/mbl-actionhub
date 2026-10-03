@@ -150,7 +150,7 @@ jobs:
   # ─── Resolve next version from Maven Central ──────────────────────────────
   resolve-version:
     name: Resolve Version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       current: ${{ steps.resolve.outputs.current }}
@@ -175,7 +175,7 @@ jobs:
   discover:
     name: Discover Modules
     needs: resolve-version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.discover.outputs.matrix }}
       modules_list: ${{ steps.discover.outputs.modules_list }}
@@ -226,7 +226,7 @@ jobs:
   # ─── Quality gate (Spotless + Detekt) ──────────────────────────────────────
   quality:
     name: Quality Gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -253,7 +253,7 @@ jobs:
   # ─── JVM tests ─────────────────────────────────────────────────────────────
   test-jvm:
     name: Test (JVM)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -375,7 +375,7 @@ jobs:
   create-release:
     name: Create GitHub Release
     needs: [resolve-version, discover, publish]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: ${{ inputs.create-github-release && needs.publish.result == 'success' }}
     permissions:
       contents: write
@@ -442,7 +442,7 @@ jobs:
   summary:
     name: Release Summary
     needs: [resolve-version, discover, publish, create-release]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: always()
     steps:
       - name: Checkout
@@ -495,7 +495,7 @@ jobs:
       inputs.bump-after-release == true &&
       inputs.gradle-properties-key != '' &&
       github.run_attempt == 1
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
       pull-requests: write
@@ -522,7 +522,7 @@ jobs:
     name: Publish to Gradle Plugin Portal
     needs: publish
     if: ${{ inputs.publish-gradle-plugin-portal == true && needs.publish.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - name: Checkout

@@ -42,7 +42,7 @@ on:
 
 jobs:
   poll-maven-availability:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       available: ${{ steps.poll.outputs.available }}
     steps:
@@ -75,7 +75,7 @@ jobs:
   dispatch-per-consumer-bumps:
     needs: poll-maven-availability
     if: needs.poll-maven-availability.outputs.available == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:

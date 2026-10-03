@@ -49,7 +49,7 @@ permissions:
 jobs:
   sync:
     name: Mirror docs/ → wiki
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout caller repo
         uses: actions/checkout@v4

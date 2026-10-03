@@ -66,7 +66,7 @@ permissions:
 jobs:
   enrich:
     name: Enrich release ${{ inputs.tag }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout at release tag
         uses: actions/checkout@v4
