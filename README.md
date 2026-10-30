@@ -192,9 +192,9 @@ The reusable workflow checks out the repo at the release tag — so the CHANGELO
 | Platform | Runner | Tests |
 |----------|--------|-------|
 | JVM | ubuntu-latest | `jvmTest` |
-| iOS Simulator | macos-14 | `iosSimulatorArm64Test` |
+| iOS Simulator | macos-15 | `iosSimulatorArm64Test` |
 | Linux Native | ubuntu-latest | `linuxX64Test` |
-| All targets (assemble) | macos-14 | `:module:assemble` |
+| All targets (assemble) | macos-15 | `:module:assemble` |
 
 ---
 
