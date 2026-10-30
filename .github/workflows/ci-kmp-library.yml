@@ -53,6 +53,10 @@ on:
         description: 'Run Spotless + Detekt quality checks'
         type: boolean
         default: true
+      compile-timeout-minutes:
+        description: 'Timeout for the Compile All Targets job. It compiles every CHANGED module for every KMP target, so a PR touching most of a large library can exceed the default; raise it there rather than splitting the PR.'
+        type: number
+        default: 30
 
 permissions:
   contents: read
@@ -412,7 +416,9 @@ jobs:
       needs.detect-changes.outputs.modules != 'NONE' &&
       needs.test-jvm.result != 'failure'
     runs-on: macos-14
-    timeout-minutes: 30
+    # Caller-tunable (default 30, unchanged): compiling every changed module for every target scales with the
+    # PR's breadth, and a fixed cap cancelled wide PRs mid-compile with no error to act on.
+    timeout-minutes: ${{ inputs.compile-timeout-minutes }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
