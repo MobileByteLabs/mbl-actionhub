@@ -297,7 +297,7 @@ jobs:
     name: Publish ${{ matrix.module }}@${{ matrix.version }}
     needs: [discover, quality, test-jvm]
     if: needs.discover.outputs.modules_list != ''
-    runs-on: macos-14        # macOS required to publish iOS/macOS klibs
+    runs-on: macos-15        # macOS required to publish iOS/macOS klibs
     timeout-minutes: 30
     permissions:
       contents: write
