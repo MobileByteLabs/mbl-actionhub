@@ -25,7 +25,7 @@ on:
 
 jobs:
   debounce-then-publish:
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.CI_RUNNER_LINUX || 'ubuntu-26.04' }}
     permissions:
       actions: write
       contents: read

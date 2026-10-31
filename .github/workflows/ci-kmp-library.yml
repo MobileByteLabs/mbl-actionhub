@@ -65,7 +65,7 @@ jobs:
   # ─── Detect changed modules ────────────────────────────────────────────────
   detect-changes:
     name: Detect Changed Modules
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.CI_RUNNER_LINUX || 'ubuntu-26.04' }}
     outputs:
       modules: ${{ steps.detect.outputs.modules }}
       build_all: ${{ steps.detect.outputs.build_all }}
@@ -164,7 +164,7 @@ jobs:
   # ─── Code quality ──────────────────────────────────────────────────────────
   quality:
     name: Code Quality
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.CI_RUNNER_LINUX || 'ubuntu-26.04' }}
     timeout-minutes: 10
     needs: detect-changes
     if: ${{ inputs.run-quality }}
@@ -205,7 +205,7 @@ jobs:
       always() &&
       needs.quality.result != 'failure' &&
       needs.detect-changes.outputs.modules != 'NONE'
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.CI_RUNNER_LINUX || 'ubuntu-26.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -271,7 +271,7 @@ jobs:
       always() &&
       needs.quality.result != 'failure' &&
       needs.detect-changes.outputs.modules != 'NONE'
-    runs-on: macos-15
+    runs-on: ${{ vars.CI_RUNNER_MAC || 'macos-15' }}
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -341,7 +341,7 @@ jobs:
       always() &&
       needs.quality.result != 'failure' &&
       needs.detect-changes.outputs.modules != 'NONE'
-    runs-on: ubuntu-26.04
+    runs-on: ${{ vars.CI_RUNNER_LINUX || 'ubuntu-26.04' }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -415,7 +415,7 @@ jobs:
       always() &&
       needs.detect-changes.outputs.modules != 'NONE' &&
       needs.test-jvm.result != 'failure'
-    runs-on: macos-15
+    runs-on: ${{ vars.CI_RUNNER_MAC || 'macos-15' }}
     # Caller-tunable (default 30, unchanged): compiling every changed module for every target scales with the
     # PR's breadth, and a fixed cap cancelled wide PRs mid-compile with no error to act on.
     timeout-minutes: ${{ inputs.compile-timeout-minutes }}
