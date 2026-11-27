@@ -422,7 +422,9 @@ jobs:
   #                        errors and missing actuals are caught at compile time; linking frameworks is not needed for
   #                        that. Still waits for the JVM tests so a red PR does not spend macOS minutes.
   compile-all-targets:
-    name: Compile (JVM · Android · Web)
+    # The name predates the split and is kept: consumers' branch protection may require "Compile All Targets", and a
+    # renamed check would leave those PRs waiting forever for one that never runs.
+    name: Compile All Targets
     needs: [detect-changes]
     if: needs.detect-changes.outputs.modules != 'NONE'
     runs-on: ${{ vars.CI_RUNNER_LINUX || 'ubuntu-latest' }}
@@ -478,7 +480,7 @@ jobs:
           fi
 
   compile-apple:
-    name: Compile (Apple)
+    name: Compile Apple Targets
     needs: [detect-changes, test-jvm]
     if: |
       always() &&
