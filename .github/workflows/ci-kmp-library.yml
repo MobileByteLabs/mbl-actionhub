@@ -458,8 +458,11 @@ jobs:
               [ -d "$dir" ] && TASKS="$TASKS :${dir%/}:assemble"
             done
           fi
-          echo "Running: ./gradlew $TASKS --parallel"
-          ./gradlew $TASKS --parallel
+          # Apple targets belong to the "Compile Apple Targets" job. Kotlin 2.2+ cross-compiles Apple klibs on Linux
+          # by default, and that fails for any module whose iOS code uses a cinterop built from the Apple SDK (e.g. a
+          # StoreKit bridge) — so turn cross-compilation off here and Linux skips those targets, as Kotlin used to.
+          echo "Running: ./gradlew $TASKS --parallel -Pkotlin.native.enableKlibsCrossCompilation=false"
+          ./gradlew $TASKS --parallel -Pkotlin.native.enableKlibsCrossCompilation=false
 
       - name: Build Summary
         run: |
