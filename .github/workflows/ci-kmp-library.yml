@@ -53,6 +53,10 @@ on:
         description: 'Run Spotless + Detekt quality checks'
         type: boolean
         default: true
+      run-apple-compile:
+        description: 'Compile the Apple targets (iOS/macOS/tvOS/watchOS) on a macOS runner — compile only, no framework linking'
+        type: boolean
+        default: true
       compile-timeout-minutes:
         description: 'Timeout for the Compile All Targets job. It compiles every CHANGED module for every KMP target, so a PR touching most of a large library can exceed the default; raise it there rather than splitting the PR.'
         type: number
@@ -71,7 +75,7 @@ jobs:
       build_all: ${{ steps.detect.outputs.build_all }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -170,19 +174,19 @@ jobs:
     if: ${{ inputs.run-quality }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate Gradle Wrapper
-        uses: gradle/actions/wrapper-validation@v4
+        uses: gradle/actions/wrapper-validation@v6
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Run Spotless Check
         run: ./gradlew spotlessCheck
@@ -191,7 +195,7 @@ jobs:
         run: ./gradlew detekt
 
       - name: Upload Detekt Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: detekt-report
@@ -209,16 +213,16 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Run JVM Tests
         run: |
@@ -254,7 +258,7 @@ jobs:
           ./gradlew $TASKS --parallel
 
       - name: Upload Test Reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: test-reports-jvm
@@ -275,23 +279,23 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Cache Kotlin/Native
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.konan
           key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts') }}
           restore-keys: ${{ runner.os }}-konan-
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Run iOS Simulator Tests
         run: |
@@ -324,7 +328,7 @@ jobs:
           ./gradlew $TASKS --parallel
 
       - name: Upload Test Reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: test-reports-ios
@@ -345,23 +349,23 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Cache Kotlin/Native
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.konan
           key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts') }}
           restore-keys: ${{ runner.os }}-konan-
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Run Linux Native Tests
         run: |
@@ -397,7 +401,7 @@ jobs:
           ./gradlew $TASKS --parallel
 
       - name: Upload Test Reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: test-reports-linux
@@ -408,38 +412,37 @@ jobs:
   # ─── Compile all targets (fast gate — always runs) ─────────────────────────
   # Catches missing actuals / type errors across every KMP platform without
   # running tests (much faster than test execution on native targets).
+  #
+  # Split in two parallel jobs (v1.12.0). One macOS job used to `assemble` everything — including linking debug AND
+  # release iOS frameworks for every module — which took 13+ minutes per PR on the most expensive runner and hit the
+  # timeout on wide PRs. Now:
+  #   compile-all-targets  Linux: `assemble` for JVM / Android / JS / Wasm (Kotlin skips Apple targets on Linux).
+  #                        Starts with the tests, not after them.
+  #   compile-apple        macOS: COMPILES the Apple targets only (compileKotlinIos*/Macos*/Tvos*/Watchos*) — type
+  #                        errors and missing actuals are caught at compile time; linking frameworks is not needed for
+  #                        that. Still waits for the JVM tests so a red PR does not spend macOS minutes.
   compile-all-targets:
-    name: Compile All Targets
-    needs: [detect-changes, test-jvm]
-    if: |
-      always() &&
-      needs.detect-changes.outputs.modules != 'NONE' &&
-      needs.test-jvm.result != 'failure'
-    runs-on: ${{ vars.CI_RUNNER_MAC || 'macos-15' }}
+    name: Compile (JVM · Android · Web)
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.modules != 'NONE'
+    runs-on: ${{ vars.CI_RUNNER_LINUX || 'ubuntu-latest' }}
     # Caller-tunable (default 30, unchanged): compiling every changed module for every target scales with the
     # PR's breadth, and a fixed cap cancelled wide PRs mid-compile with no error to act on.
     timeout-minutes: ${{ inputs.compile-timeout-minutes }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Cache Kotlin/Native
-        uses: actions/cache@v4
-        with:
-          path: ~/.konan
-          key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts') }}
-          restore-keys: ${{ runner.os }}-konan-
+        uses: actions/checkout@v7
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           java-version: ${{ inputs.java-version }}
           distribution: ${{ inputs.java-distribution }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
-      - name: Assemble All Libraries (All Targets)
+      - name: Assemble All Libraries (JVM · Android · Web)
         run: |
           MODULE_PATH="${{ inputs.module-path }}"
           TASKS=""
@@ -464,12 +467,75 @@ jobs:
           echo "| Module | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|--------|" >> $GITHUB_STEP_SUMMARY
           if [ -n "$MODULE_PATH" ]; then
-            echo "| $MODULE_PATH | ✅ All targets compiled |" >> $GITHUB_STEP_SUMMARY
+            echo "| $MODULE_PATH | ✅ JVM · Android · Web compiled |" >> $GITHUB_STEP_SUMMARY
           else
             PATTERN="${{ inputs.module-pattern }}"
             for dir in ${PATTERN}*/; do
               if [ -d "$dir" ] && [ "$dir" != "${PATTERN}library/" ]; then
-                echo "| ${dir%/} | ✅ All targets compiled |" >> $GITHUB_STEP_SUMMARY
+                echo "| ${dir%/} | ✅ JVM · Android · Web compiled |" >> $GITHUB_STEP_SUMMARY
               fi
             done
           fi
+
+  compile-apple:
+    name: Compile (Apple)
+    needs: [detect-changes, test-jvm]
+    if: |
+      always() &&
+      inputs.run-apple-compile &&
+      needs.detect-changes.outputs.modules != 'NONE' &&
+      needs.test-jvm.result != 'failure'
+    runs-on: ${{ vars.CI_RUNNER_MAC || 'macos-15' }}
+    timeout-minutes: ${{ inputs.compile-timeout-minutes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cache Kotlin/Native
+        uses: actions/cache@v6
+        with:
+          path: ~/.konan
+          key: ${{ runner.os }}-konan-${{ hashFiles('**/*.gradle.kts') }}
+          restore-keys: ${{ runner.os }}-konan-
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v6
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Compile Apple targets
+        run: |
+          # The modules in scope, as Gradle paths.
+          MODULE_PATH="${{ inputs.module-path }}"
+          MODULES=""
+          if [ -n "$MODULE_PATH" ]; then
+            MODULES=":$(echo "$MODULE_PATH" | tr '/' ':')"
+          else
+            PATTERN="${{ inputs.module-pattern }}"
+            for dir in ${PATTERN}*/; do
+              [ "$dir" = "${PATTERN}library/" ] && continue
+              [ -d "$dir" ] && MODULES="$MODULES :${dir%/}"
+            done
+          fi
+          # Only the Apple compile tasks that EXIST — a module without Apple targets (e.g. a JS-only web module) has
+          # none, and naming a missing task fails the build. One configuration pass lists them all.
+          ./gradlew tasks --all -q > "$RUNNER_TEMP/tasks.txt"
+          TASKS=""
+          for m in $MODULES; do
+            mod="${m#:}"
+            for t in $(grep -oE "^${mod}:compileKotlin(Ios|Macos|Tvos|Watchos)[A-Za-z0-9]*( |$)" "$RUNNER_TEMP/tasks.txt" | tr -d ' '); do
+              TASKS="$TASKS :$t"
+            done
+          done
+          if [ -z "$TASKS" ]; then
+            echo "No Apple targets in scope — nothing to compile."
+            echo "| Apple | ➖ no Apple targets in scope |" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          echo "Running: ./gradlew $TASKS --parallel"
+          ./gradlew $TASKS --parallel
+          echo "| Apple | ✅ compiled: $(echo $TASKS | wc -w | tr -d ' ') task(s) |" >> $GITHUB_STEP_SUMMARY
